@@ -4,11 +4,8 @@ from typing import Any
 
 import anthropic
 from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_exponential,
-    retry_if_exception_type,
-    before_sleep_log,
+    retry, stop_after_attempt, wait_exponential,
+    retry_if_exception_type, before_sleep_log,
 )
 
 from app.config import get_settings
@@ -39,8 +36,13 @@ async def complete(
     messages: list[dict],
     system: str = "",
     max_tokens: int = 4096,
-) -> anthropic.types.Message:
+):
     cfg = get_settings()
+
+    if cfg.dry_run:
+        from app.mocks.mock_clients import mock_claude_complete
+        return await mock_claude_complete(messages, system, max_tokens)
+
     breaker = get_breaker("claude")
 
     async def _call():
@@ -57,8 +59,9 @@ async def complete(
     return await breaker.call(_call, is_retryable_error=_is_retryable)
 
 
-def estimate_cost(message: anthropic.types.Message) -> float:
-    input_tokens = message.usage.input_tokens
-    output_tokens = message.usage.output_tokens
-    cost = (input_tokens / 1_000_000) * 3.0 + (output_tokens / 1_000_000) * 15.0
+def estimate_cost(message) -> float:
+    if not hasattr(message, "usage") or not hasattr(message.usage, "input_tokens"):
+        return 0.0
+    cost = (message.usage.input_tokens / 1_000_000) * 3.0 \
+         + (message.usage.output_tokens / 1_000_000) * 15.0
     return round(cost, 6)

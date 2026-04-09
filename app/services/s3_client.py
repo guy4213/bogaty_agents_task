@@ -7,11 +7,8 @@ from typing import Any
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_exponential,
-    retry_if_exception_type,
-    before_sleep_log,
+    retry, stop_after_attempt, wait_exponential,
+    retry_if_exception_type, before_sleep_log,
 )
 
 from app.config import get_settings
@@ -31,8 +28,7 @@ def _get_client():
 
 def _sync_upload_bytes(key: str, data: bytes, content_type: str) -> None:
     cfg = get_settings()
-    client = _get_client()
-    client.put_object(
+    _get_client().put_object(
         Bucket=cfg.s3_bucket_name,
         Key=key,
         Body=data,
@@ -42,8 +38,7 @@ def _sync_upload_bytes(key: str, data: bytes, content_type: str) -> None:
 
 def _sync_presign(key: str, expiry_sec: int = 3600) -> str:
     cfg = get_settings()
-    client = _get_client()
-    return client.generate_presigned_url(
+    return _get_client().generate_presigned_url(
         "get_object",
         Params={"Bucket": cfg.s3_bucket_name, "Key": key},
         ExpiresIn=expiry_sec,
@@ -58,9 +53,12 @@ def _sync_presign(key: str, expiry_sec: int = 3600) -> str:
     reraise=True,
 )
 async def upload_bytes(key: str, data: bytes, content_type: str = "application/octet-stream") -> str:
+    if get_settings().dry_run:
+        from app.mocks.mock_clients import mock_upload_bytes
+        return await mock_upload_bytes(key, data, content_type)
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, _sync_upload_bytes, key, data, content_type)
-    logger.info("S3 upload: s3://%s/%s (%d bytes)", get_settings().s3_bucket_name, key, len(data))
+    logger.info("S3 upload: %s (%d bytes)", key, len(data))
     return key
 
 
@@ -76,12 +74,14 @@ async def upload_text(key: str, text: str) -> str:
 async def upload_file(local_path: str, key: str, content_type: str = "application/octet-stream") -> str:
     cfg = get_settings()
     loop = asyncio.get_event_loop()
-    client = _get_client()
-    await loop.run_in_executor(None, lambda: client.upload_file(local_path, cfg.s3_bucket_name, key))
+    await loop.run_in_executor(None, lambda: _get_client().upload_file(local_path, cfg.s3_bucket_name, key))
     return key
 
 
 async def presigned_url(key: str, expiry_sec: int = 3600) -> str:
+    if get_settings().dry_run:
+        from app.mocks.mock_clients import mock_presigned_url
+        return await mock_presigned_url(key, expiry_sec)
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, _sync_presign, key, expiry_sec)
 
