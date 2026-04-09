@@ -46,6 +46,7 @@ def _build_initial_state(
         description=description,
         pipeline_type=pipeline_type.value,
         style_reference_image=style_reference_image,
+        visual_style_descriptor="",   
         generated_texts=[],
         generated_images=[],
         generated_videos=[],

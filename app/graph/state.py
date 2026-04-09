@@ -17,7 +17,8 @@ class ContentEngineState(TypedDict):
     pipeline_type: Literal["text_only", "text_image", "full_video"]
 
     # Style reference — set by Image Agent after first image generation
-    style_reference_image: Optional[str]
+    style_reference_image: Optional[str]   # S3 key of first generated image — style anchor
+    visual_style_descriptor: str           # One-sentence style guide from Content Agent
 
     # Agent outputs — accumulated progressively
     generated_texts: list[dict]

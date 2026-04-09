@@ -35,8 +35,8 @@ def _build_image_prompt(state: ContentEngineState, is_thumbnail: bool = False) -
         "telegram":  "clean, well-lit, clear subject",
     }.get(platform, "professional photography")
 
-    thumbnail_note = " This is a video thumbnail — make it visually compelling and click-worthy." if is_thumbnail else ""
-    lang_note = " Include no text overlays." if lang == "en" else ""
+    thumbnail_note = " This is a video thumbnail — visually compelling, click-worthy." if is_thumbnail else ""
+    lang_note = " No text overlays." if lang == "en" else ""
 
     return (
         f"Photorealistic food photography: {desc}. "
@@ -53,16 +53,23 @@ async def run(state: ContentEngineState) -> dict:
     is_thumbnail = content_type == "reels"
 
     aspect_ratio = ASPECT_RATIOS.get((platform, content_type), DEFAULT_ASPECT)
-    prompt = _build_image_prompt(state, is_thumbnail=is_thumbnail)
+    scene_prompt = _build_image_prompt(state, is_thumbnail=is_thumbnail)
+
+    # Visual style descriptor — constant across all items, set by Content Agent
+    visual_style_descriptor: str = state.get("visual_style_descriptor", "")
 
     logger.info(
-        "[%s] ImageAgent: item_%d platform=%s type=%s ratio=%s thumbnail=%s",
-        task_id, item_index, platform, content_type, aspect_ratio, is_thumbnail,
+        "[%s] ImageAgent: item_%d platform=%s type=%s ratio=%s has_style_descriptor=%s",
+        task_id, item_index, platform, content_type, aspect_ratio,
+        bool(visual_style_descriptor),
     )
 
-    # Load style reference bytes if available
+    # ------------------------------------------------------------------
+    # Load style reference bytes if a previous item already generated an image
+    # ------------------------------------------------------------------
     style_reference_bytes: bytes | None = None
     style_ref_key = state.get("style_reference_image")
+
     if style_ref_key:
         try:
             from app.services.s3_client import _get_client
@@ -74,16 +81,29 @@ async def run(state: ContentEngineState) -> dict:
                 lambda: s3.get_object(Bucket=cfg.s3_bucket_name, Key=style_ref_key),
             )
             style_reference_bytes = resp["Body"].read()
-            logger.info("[%s] ImageAgent: style reference loaded from %s", task_id, style_ref_key)
+            logger.info(
+                "[%s] ImageAgent: style reference loaded (%d bytes) from %s",
+                task_id, len(style_reference_bytes), style_ref_key,
+            )
         except Exception as exc:
-            logger.warning("[%s] ImageAgent: could not load style reference (%s) — proceeding without", task_id, exc)
+            logger.warning(
+                "[%s] ImageAgent: could not load style reference (%s) — proceeding without",
+                task_id, exc,
+            )
 
+    # ------------------------------------------------------------------
+    # Generate image
+    # Both style_reference_bytes AND visual_style_descriptor are passed so
+    # gemini_client places them correctly in the prompt for each code path.
+    # ------------------------------------------------------------------
     image_bytes = await generate_image(
-        prompt=prompt,
+        prompt=scene_prompt,
         aspect_ratio=aspect_ratio,
         style_reference_bytes=style_reference_bytes,
+        visual_style_descriptor=visual_style_descriptor,
     )
 
+    # Upload image to S3
     filename = "thumbnail.png" if is_thumbnail else "image.png"
     s3_key = asset_key(task_id, platform, content_type, item_index, filename)
     await upload_bytes(s3_key, image_bytes, content_type="image/png")
@@ -95,12 +115,14 @@ async def run(state: ContentEngineState) -> dict:
         caption_text = caption_data.get("text", "")
         hashtags = caption_data.get("hashtags", [])
         full_caption = caption_text + "\n\n" + " ".join(hashtags) if hashtags else caption_text
-        caption_key = asset_key(task_id, platform, content_type, item_index, "caption.txt")
-        await upload_text(caption_key, full_caption)
+        if full_caption.strip():
+            caption_key = asset_key(task_id, platform, content_type, item_index, "caption.txt")
+            await upload_text(caption_key, full_caption)
 
     image_record = {
         "s3_key": s3_key,
-        "prompt": prompt,
+        "prompt": scene_prompt,
+        "visual_style_descriptor": visual_style_descriptor,
         "dimensions": "native",
         "aspect_ratio": aspect_ratio,
         "is_thumbnail": is_thumbnail,
@@ -112,10 +134,16 @@ async def run(state: ContentEngineState) -> dict:
         "cost_accumulated": state.get("cost_accumulated", 0.0) + 0.04,
     }
 
-    # Set style reference for subsequent items
+    # First image in the batch sets the style reference anchor for all subsequent items
     if not state.get("style_reference_image"):
         updates["style_reference_image"] = s3_key
-        logger.info("[%s] ImageAgent: style reference set to %s", task_id, s3_key)
+        logger.info(
+            "[%s] ImageAgent: style reference anchor set -> %s",
+            task_id, s3_key,
+        )
 
-    logger.info("[%s] ImageAgent: item_%d image uploaded to %s", task_id, item_index, s3_key)
+    logger.info(
+        "[%s] ImageAgent: item_%d uploaded -> %s (used_reference=%s)",
+        task_id, item_index, s3_key, style_reference_bytes is not None,
+    )
     return updates
