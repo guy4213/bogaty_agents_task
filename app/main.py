@@ -235,3 +235,191 @@ async def health():
 @app.get("/")
 async def root():
     return {"status": "ok", "service": "content-engine", "version": "1.0.0-mvp"}
+
+# ---------------------------------------------------------------------------
+# GET /tasks/{task_id}/content  — list all assets with readable content
+# ---------------------------------------------------------------------------
+
+@app.get("/tasks/{task_id}/content")
+async def get_task_content(task_id: str = Path(...)):
+    """
+    Returns all generated content for a task.
+    In dry-run mode reads from local filesystem.
+    In production returns presigned S3 URLs for every asset.
+    """
+    record = await task_store.get(task_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+
+    if record.status.value == "pending":
+        return {"task_id": task_id, "status": "pending", "message": "Task not started yet"}
+
+    if record.status.value == "processing":
+        return {"task_id": task_id, "status": "processing", "message": "Still running, try again shortly"}
+
+    if not record.manifest_s3_key:
+        raise HTTPException(status_code=404, detail="Manifest not yet available")
+
+    # Read manifest
+    manifest = await _read_manifest(record.manifest_s3_key)
+    if not manifest:
+        raise HTTPException(status_code=404, detail="Manifest file not found")
+
+    # Build response with inline text content + URLs for binary assets
+    assets_out = []
+    for asset in manifest.get("assets", []):
+        s3_key = asset.get("s3_key", "")
+        file_format = asset.get("file_format", "")
+        asset_type = asset.get("asset_type", "")
+
+        entry = {
+            "item_index": asset.get("item_index"),
+            "asset_type": asset_type,
+            "file_format": file_format,
+            "s3_key": s3_key,
+            "validation_passed": asset.get("validation_passed"),
+        }
+
+        # For text/json assets — inline the actual content
+        if file_format in ("json", "txt") or asset_type in ("text", "caption"):
+            content = await _read_asset_text(s3_key)
+            if content:
+                try:
+                    import json as _json
+                    entry["content"] = _json.loads(content)
+                except Exception:
+                    entry["content"] = content
+
+        # For binary assets — generate a download URL
+        else:
+            try:
+                from app.services.s3_client import presigned_url
+                entry["download_url"] = await presigned_url(s3_key, expiry_sec=3600)
+            except Exception:
+                entry["download_url"] = None
+
+        assets_out.append(entry)
+
+    return {
+        "task_id": task_id,
+        "status": manifest.get("status"),
+        "platform": manifest.get("platform"),
+        "content_type": manifest.get("content_type"),
+        "language": manifest.get("language"),
+        "quantity_requested": manifest.get("quantity_requested"),
+        "quantity_delivered": manifest.get("quantity_delivered"),
+        "total_cost_usd": manifest.get("total_cost_usd"),
+        "assets": assets_out,
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /tasks/{task_id}/content/{item_index}  — single item detail
+# ---------------------------------------------------------------------------
+
+@app.get("/tasks/{task_id}/content/{item_index}")
+async def get_item_content(
+    task_id: str = Path(...),
+    item_index: int = Path(...),
+):
+    """
+    Returns all assets for a single item in the batch.
+    Text content is returned inline. Images/video get presigned download URLs.
+    """
+    record = await task_store.get(task_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+
+    if not record.manifest_s3_key:
+        raise HTTPException(status_code=404, detail="Manifest not yet available")
+
+    manifest = await _read_manifest(record.manifest_s3_key)
+    if not manifest:
+        raise HTTPException(status_code=404, detail="Manifest file not found")
+
+    # Filter assets for this item
+    item_assets = [a for a in manifest.get("assets", []) if a.get("item_index") == item_index]
+    if not item_assets:
+        raise HTTPException(status_code=404, detail=f"No assets found for item {item_index}")
+
+    result = {"task_id": task_id, "item_index": item_index, "files": {}}
+
+    for asset in item_assets:
+        s3_key = asset.get("s3_key", "")
+        file_format = asset.get("file_format", "")
+        asset_type = asset.get("asset_type", "")
+        filename = s3_key.split("/")[-1] if s3_key else "unknown"
+
+        if file_format in ("json", "txt") or asset_type in ("text", "caption"):
+            content = await _read_asset_text(s3_key)
+            if content:
+                try:
+                    import json as _json
+                    result["files"][filename] = _json.loads(content)
+                except Exception:
+                    result["files"][filename] = content
+        else:
+            try:
+                from app.services.s3_client import presigned_url
+                result["files"][filename] = await presigned_url(s3_key, expiry_sec=3600)
+            except Exception:
+                result["files"][filename] = None
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+async def _read_manifest(manifest_s3_key: str) -> dict | None:
+    """Read manifest.json from S3 or local filesystem (dry run)."""
+    import json as _json
+    from app.config import get_settings
+
+    if get_settings().dry_run:
+        from app.mocks.mock_clients import _LOCAL_S3_ROOT
+        path = _LOCAL_S3_ROOT / manifest_s3_key
+        if not path.exists():
+            return None
+        return _json.loads(path.read_text(encoding="utf-8"))
+
+    try:
+        from app.services.s3_client import _get_client
+        cfg = get_settings()
+        import asyncio
+        loop = asyncio.get_event_loop()
+        s3 = _get_client()
+        resp = await loop.run_in_executor(
+            None,
+            lambda: s3.get_object(Bucket=cfg.s3_bucket_name, Key=manifest_s3_key),
+        )
+        return _json.loads(resp["Body"].read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+async def _read_asset_text(s3_key: str) -> str | None:
+    """Read a text/json asset as string from S3 or local filesystem."""
+    from app.config import get_settings
+
+    if get_settings().dry_run:
+        from app.mocks.mock_clients import _LOCAL_S3_ROOT
+        path = _LOCAL_S3_ROOT / s3_key
+        if not path.exists():
+            return None
+        return path.read_text(encoding="utf-8")
+
+    try:
+        from app.services.s3_client import _get_client
+        cfg = get_settings()
+        import asyncio
+        loop = asyncio.get_event_loop()
+        s3 = _get_client()
+        resp = await loop.run_in_executor(
+            None,
+            lambda: s3.get_object(Bucket=cfg.s3_bucket_name, Key=s3_key),
+        )
+        return resp["Body"].read().decode("utf-8")
+    except Exception:
+        return None

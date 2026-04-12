@@ -35,6 +35,11 @@ def _make_comments(quantity: int, lang: str) -> str:
         "אפשר להכין את זה בתקציב של 20 שקל?",
         "הצבעים במנה הזו פשוט מושלמים לצילום!",
         "מצוין לדיאטה? יש כאן הרבה פחמימות...",
+        "המנה הזו מזכירה לי את סבתא שלי, כל כך נוסטלגי!",
+        "חייב לנסות את זה עם גבינת פרמזן איכותית.",
+        "נראה מעולה! כמה זמן לוקח להכין?",
+        "הכנתי את זה אמש וכל המשפחה אהבה!",
+        "פסטה טרייה או יבשה? זה הסוד כנראה.",
     ]
     texts_en = [
         "This looks absolutely amazing! I need to try this recipe.",
@@ -47,13 +52,22 @@ def _make_comments(quantity: int, lang: str) -> str:
         "Can this be made on a $10 budget?",
         "The colors in this dish are just perfect for photography!",
         "Good for dieting? Seems like a lot of carbs...",
+        "This reminds me of my grandmother's cooking, so nostalgic!",
+        "Must try this with some quality parmesan on top.",
+        "Looks amazing! How long does it take to make?",
+        "Made this last night and the whole family loved it!",
+        "Fresh pasta or dried? That's probably the secret.",
     ]
     texts = texts_he if lang == "he" else texts_en
-    return json.dumps([
-        {"index": i, "text": texts[i % len(texts)], "persona": personas[i % len(personas)]}
-        for i in range(quantity)
-    ])
 
+    return json.dumps([
+        {
+            "index": idx,
+            "text": texts[idx % len(texts)],   # ← כל תגובה שונה
+            "persona": personas[idx % len(personas)],
+        }
+        for idx in range(quantity)
+    ])
 
 def _make_captions(quantity: int, lang: str, platform: str) -> str:
     texts_he = [

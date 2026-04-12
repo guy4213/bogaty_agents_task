@@ -9,29 +9,29 @@ from app.services.s3_client import upload_bytes, asset_key, upload_text
 logger = logging.getLogger(__name__)
 
 
-def _build_initial_prompt(scene: dict, lang: str) -> str:
+def _build_initial_prompt(scene: dict, lang: str, visual_style: str = "") -> str:
     visual = scene.get("visual_description", "")
-    caption = scene.get("caption_text", "")
     audio_mood = scene.get("audio_mood", "ambient kitchen sounds")
-    lang_note = "with Hebrew text overlay at bottom" if lang == "he" else "with English text overlay at bottom"
+    style_anchor = f" Visual style: {visual_style}." if visual_style else ""
+
     return (
-        f"{visual}. "
-        f"Caption text rendered directly into frame ({lang_note}): \"{caption}\". "
+        f"{visual}.{style_anchor} "
         f"Audio: {audio_mood}. "
         f"9:16 vertical format, 1080x1920, cinematic food videography, "
-        f"warm lighting, professional grade."
+        f"warm lighting, professional grade. No text overlays whatsoever."
     )
 
 
-def _build_extend_prompt(scene: dict, lang: str) -> str:
+def _build_extend_prompt(scene: dict, lang: str, visual_style: str = "") -> str:
     visual = scene.get("visual_description", "")
-    caption = scene.get("caption_text", "")
-    lang_note = "Hebrew text overlay" if lang == "he" else "English text overlay"
+    style_anchor = f" Maintain this exact visual style: {visual_style}." if visual_style else ""
+
     return (
-        f"Continue seamlessly: {visual}. "
-        f"{lang_note} at bottom: \"{caption}\". "
-        f"Maintain visual continuity, same lighting, same style."
+        f"Continue seamlessly: {visual}.{style_anchor} "
+        f"SAME ingredients, SAME kitchen, SAME lighting. "
+        f"No text overlays whatsoever."
     )
+
 
 
 async def run(state: ContentEngineState) -> dict:
@@ -51,6 +51,9 @@ async def run(state: ContentEngineState) -> dict:
     content_type = state["content_type"]
     lang = state["language"]
 
+    # Visual style descriptor — constant across all scenes for consistency
+    visual_style = state.get("visual_style_descriptor", "")
+
     # Extract scene data from the Content Agent's output
     texts = state.get("generated_texts", [])
     script = texts[0] if texts else {}
@@ -60,7 +63,7 @@ async def run(state: ContentEngineState) -> dict:
         logger.error("[%s] VideoAgent: no scenes found in generated_texts", task_id)
         raise ValueError("No scene data available for video generation")
 
-    required_extends = len(scenes) - 1  # First scene = initial gen, rest = extends
+    required_extends = len(scenes) - 1  # 4 scenes = 3 extends = 29 seconds
 
     # ------------------------------------------------------------------
     # Tier 3: Resume from checkpoint if partial work was done
@@ -82,7 +85,7 @@ async def run(state: ContentEngineState) -> dict:
             "[%s] VideoAgent: item_%d generating initial clip (scene 1, %ds)",
             task_id, item_index, cfg.veo_initial_duration_sec,
         )
-        initial_prompt = _build_initial_prompt(scenes[0], lang)
+        initial_prompt = _build_initial_prompt(scenes[0], lang, visual_style)
         current_video_ref = await generate_video_initial(initial_prompt)
         completed_extends = 0
         logger.info(
@@ -95,7 +98,7 @@ async def run(state: ContentEngineState) -> dict:
     # ------------------------------------------------------------------
     for extend_idx in range(completed_extends, required_extends):
         scene = scenes[extend_idx + 1]  # scenes[0] was the initial clip
-        extend_prompt = _build_extend_prompt(scene, lang)
+        extend_prompt = _build_extend_prompt(scene, lang, visual_style)
 
         logger.info(
             "[%s] VideoAgent: extend %d/%d (scene %d)",
@@ -114,28 +117,12 @@ async def run(state: ContentEngineState) -> dict:
                 task_id, completed_extends, current_video_ref,
             )
 
-            # The LangGraph MemorySaver checkpoints the state after EVERY node return.
-            # We yield intermediate state by raising a special sentinel and re-entering —
-            # but LangGraph doesn't support mid-node yielding. Instead, we persist
-            # current_video_ref and completed_extends into the state at every iteration
-            # so that if an exception occurs on the NEXT iteration, the checkpoint
-            # already contains the progress up to this point.
-            # This works because LangGraph re-saves the full state dict we return.
-            # In practice: raise on extend_idx=2 → checkpoint has completed_extends=2,
-            # so retry skips straight to extend_idx=2.
-            # We achieve this by catching exceptions below and re-raising with state intact.
-
         except Exception as exc:
             logger.error(
                 "[%s] VideoAgent: extend %d FAILED (%s) — "
                 "state preserved: completed_extends=%d video_ref=%s",
                 task_id, extend_idx + 1, exc, completed_extends, current_video_ref,
             )
-            # Return partial state so LangGraph checkpoints progress
-            # The exception propagates AFTER we've recorded what was done
-            # by updating the state and letting LangGraph save it.
-            # We return a partial result dict here and re-raise to signal failure.
-            # The runner's try/except will catch it at Tier 1.
             raise _PartialVideoError(
                 str(exc),
                 current_video_ref=current_video_ref,
@@ -156,11 +143,12 @@ async def run(state: ContentEngineState) -> dict:
     video_key = asset_key(task_id, platform, content_type, item_index, "video.mp4")
     await upload_bytes(video_key, video_bytes, content_type="video/mp4")
 
-    # Upload script alongside video
+    # Upload script alongside video — Hebrew captions preserved here
     script_text = "\n\n".join(
         f"Scene {s.get('scene', i+1)} ({s.get('duration_sec', 7)}s):\n"
         f"Visual: {s.get('visual_description', '')}\n"
-        f"Caption: {s.get('caption_text', '')}"
+        f"Caption (HE): {s.get('caption_text', '')}\n"
+        f"Caption (EN): {s.get('caption_text_en', '')}"
         for i, s in enumerate(scenes)
     )
     script_key = asset_key(task_id, platform, content_type, item_index, "script.txt")
@@ -189,6 +177,7 @@ async def run(state: ContentEngineState) -> dict:
         "completed_extends": completed_extends,
         "cost_accumulated": state.get("cost_accumulated", 0.0) + veo_cost,
     }
+
 
 
 class _PartialVideoError(Exception):

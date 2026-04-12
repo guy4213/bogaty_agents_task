@@ -120,21 +120,26 @@ async def run_batch(
     )
 
     required_services = PIPELINE_SERVICES[pipeline_type.value]
-    try:
-        await preflight_check(required_services)
-        logger.info("[%s] Pre-flight OK: %s", task_id, required_services)
-    except PreflightError as exc:
-        await task_store.set_failed(task_id, str(exc))
-        logger.error("[%s] Pre-flight FAILED: %s", task_id, exc)
-        return
+    if get_settings().dry_run:
+        logger.info("[%s] DRY_RUN: skipping pre-flight checks", task_id)
+    else:
+        try:
+            await preflight_check(required_services)
+            logger.info("[%s] Pre-flight OK: %s", task_id, required_services)
+        except PreflightError as exc:
+            await task_store.set_failed(task_id, str(exc))
+            logger.error("[%s] Pre-flight FAILED: %s", task_id, exc)
+            return
 
     failed_items: list[FailedItem] = []
     all_assets: list[AssetRecord] = []
     style_reference_image: str | None = None
     total_cost = 0.0
     total_checkpoint_savings = 0.0
+    
+    items_to_run = 1 if pipeline_type == PipelineType.text_only else quantity
 
-    for i in range(quantity):
+    for i in range(items_to_run):
         logger.info("[%s] Starting item %d / %d", task_id, i, quantity - 1)
         try:
             result = await _run_single_item(

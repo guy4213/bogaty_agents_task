@@ -44,6 +44,8 @@ HASHTAG_LIMITS = {
 # Prompt builders
 # ---------------------------------------------------------------------------
 
+
+
 def _build_comments_prompt(state: ContentEngineState) -> str:
     quantity = state["quantity"]
     lang = state["language"]
@@ -131,7 +133,6 @@ Schema:
   ]
 }}"""
 
-
 def _build_reels_script_prompt(state: ContentEngineState) -> str:
     lang = state["language"]
     desc = state["description"]
@@ -140,9 +141,9 @@ def _build_reels_script_prompt(state: ContentEngineState) -> str:
         else "Write the script and all captions in English."
     )
     caption_note = (
-        "Caption text will be rendered in Hebrew directly onto video frames. Keep each caption concise (max 8 Hebrew words)."
+        "Caption text will be rendered onto video frames. Keep each caption concise (max 8 Hebrew words)."
         if lang == "he"
-        else "Caption text will be embedded into video frames by Veo 3.1. Keep each caption concise (max 8 words)."
+        else "Caption text will be embedded into video frames. Keep each caption concise (max 8 words)."
     )
 
     return f"""Generate a 30-second video Reel script about: "{desc}"
@@ -153,16 +154,33 @@ Structure: exactly 4 scenes (8s + 7s + 7s + 7s = 29 seconds total)
 
 {caption_note}
 
+IMPORTANT: Veo video model cannot render RTL text correctly.
+For each scene you MUST provide TWO caption fields:
+- "caption_text": the caption in {("Hebrew" if lang == "he" else "English")} (for script.txt and S3 storage)
+- "caption_text_en": the caption translated to English (for Veo rendering — always English regardless of language)
+
 Also produce a single "visual_style_descriptor" — one sentence (max 25 words) that locks
 the visual style for ALL scenes and the thumbnail image. Specify: lighting temperature,
 color palette, camera movement style, and mood.
 Example: "Warm golden-hour tones, steam rising close-ups, slow push-in camera, vibrant appetizing mood."
 
-Scene requirements:
-1. Scene 1 (8s): Opening hook — ingredient prep / raw ingredients close-up
-2. Scene 2 (7s): Cooking in action — heat, steam, sizzle
-3. Scene 3 (7s): Plating and presentation
-4. Scene 4 (7s): Final beauty shot / call to action
+CRITICAL — scenes must follow strict cooking chronology.
+The entire video tells ONE continuous story — same kitchen, same pot, same dish:
+- Scene 1: RAW ingredients only — pasta, tomatoes, basil laid out. Nothing cooked yet.
+- Scene 2: COOKING — the exact same pasta from scene 1 being boiled in a pot. Same ingredients, same kitchen.
+- Scene 3: PLATING — the exact same cooked pasta being plated. Continuous from scene 2.
+- Scene 4: FINAL beauty shot — the exact same plated dish from scene 3. No new ingredients.
+
+STRICTLY FORBIDDEN:
+- Do NOT introduce new ingredients not mentioned in the description
+- Do NOT change the food type between scenes
+- Do NOT show a different kitchen or setting
+- Each scene_description must reference the SAME specific ingredients and dish
+
+For each scene, the visual_description must be extremely specific and locked:
+- Name the exact ingredients (e.g. "fettuccine pasta and cherry tomatoes" not just "pasta")
+- Name the exact setting (e.g. "rustic wooden kitchen counter with marble surface")
+- Name the exact cooking vessel (e.g. "large silver pot with boiling water")
 
 Return ONLY a valid JSON object. No preamble, no markdown fences.
 Schema:
@@ -170,15 +188,42 @@ Schema:
   "index": 0,
   "visual_style_descriptor": "...",
   "scenes": [
-    {{"scene": 1, "duration_sec": 8, "visual_description": "...", "caption_text": "...", "audio_mood": "..."}},
-    {{"scene": 2, "duration_sec": 7, "visual_description": "...", "caption_text": "...", "audio_mood": "..."}},
-    {{"scene": 3, "duration_sec": 7, "visual_description": "...", "caption_text": "...", "audio_mood": "..."}},
-    {{"scene": 4, "duration_sec": 7, "visual_description": "...", "caption_text": "...", "audio_mood": "..."}}
+    {{
+      "scene": 1,
+      "duration_sec": 8,
+      "visual_description": "...",
+      "caption_text": "...",
+      "caption_text_en": "...",
+      "audio_mood": "..."
+    }},
+    {{
+      "scene": 2,
+      "duration_sec": 7,
+      "visual_description": "...",
+      "caption_text": "...",
+      "caption_text_en": "...",
+      "audio_mood": "..."
+    }},
+    {{
+      "scene": 3,
+      "duration_sec": 7,
+      "visual_description": "...",
+      "caption_text": "...",
+      "caption_text_en": "...",
+      "audio_mood": "..."
+    }},
+    {{
+      "scene": 4,
+      "duration_sec": 7,
+      "visual_description": "...",
+      "caption_text": "...",
+      "caption_text_en": "...",
+      "audio_mood": "..."
+    }}
   ],
   "hashtags": ["#tag1", "#tag2"],
   "full_caption": "..."
 }}"""
-
 
 # ---------------------------------------------------------------------------
 # Helpers

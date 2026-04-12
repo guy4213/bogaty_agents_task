@@ -24,17 +24,21 @@ class Settings(BaseSettings):
     claude_timeout_sec: int = Field(default=30)
     claude_max_retries: int = Field(default=3)
 
-    image_model: str = Field(default="gemini-2.0-flash-preview-image-generation")
+    image_model_first: str = Field(default="imagen-4.0-fast-generate-001")
+    image_model_style_ref: str = Field(default="gemini-3.1-flash-image-preview")
     image_timeout_sec: int = Field(default=45)
     image_max_retries: int = Field(default=3)
-
+    # Vertex AI
+    vertex_project_id: str = Field(default="")
+    vertex_location: str = Field(default="us-central1")
+    google_application_credentials: str = Field(default="")
     veo_model: str = Field(default="veo-3.1-generate-preview")
     veo_timeout_sec: int = Field(default=90)
     veo_max_retries: int = Field(default=2)
     veo_initial_duration_sec: int = Field(default=8)
     veo_extend_duration_sec: int = Field(default=7)
     veo_target_duration_sec: int = Field(default=29)
-
+    gcs_bucket_name: str = Field(default="bogaty-492815-video-temp")
     content_validator_min_score: int = Field(default=6)
     max_retries_per_item: int = Field(default=2)
     jaccard_similarity_threshold: float = Field(default=0.7)
@@ -54,5 +58,5 @@ _settings: Settings | None = None
 def get_settings() -> Settings:
     global _settings
     if _settings is None:
-        _settings = Settings()
+        _settings = Settings(_env_file=".env")
     return _settings
