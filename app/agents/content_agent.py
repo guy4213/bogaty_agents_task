@@ -173,7 +173,28 @@ For each scene you MUST provide TWO caption fields:
 Also produce a "visual_style_descriptor" — one sentence (max 25 words) locking the
 visual style for ALL scenes and the thumbnail.
 
-CRITICAL: scenes must follow strict cooking chronology (same kitchen, pot, dish).
+CRITICAL — scenes must follow strict chronological story progression.
+The entire video tells ONE continuous story — same location, same subject, same visual language:
+- Scene 1 (8s): Opening hook — establish the subject, raw/initial state
+- Scene 2 (7s): Action/process — the transformation or key action happening
+- Scene 3 (7s): Progress/detail — close-up of the key moment or result developing
+- Scene 4 (7s): Final reveal — completed result, beauty shot, call to action
+
+STRICTLY FORBIDDEN:
+- Do NOT introduce new elements not present from the start
+- Do NOT change location or setting between scenes
+- Each visual_description must reference the SAME specific subject throughout
+
+AUDIO — this is critical for viewer engagement:
+For each scene's "audio_mood", be VERY specific and match it to the video content:
+- Describe the exact music genre (e.g. "upbeat lo-fi hip hop", "warm acoustic guitar", "cinematic orchestral build")
+- Describe the energy level (e.g. "energetic and rhythmic", "calm and warm", "building excitement")
+- Include ambient sounds relevant to the scene (e.g. "sizzling sounds", "crowd ambience", "nature sounds")
+- Keep musical theme CONSISTENT across all 4 scenes — same genre, evolving energy
+- Match the platform: TikTok = energetic and modern, Instagram = warm and aspirational
+
+Example for a cooking video:
+"upbeat Mediterranean acoustic guitar, rhythmic and warm, with sizzling kitchen ambience sounds"
 
 Return ONLY a valid JSON object. No preamble, no markdown fences.
 Schema:
@@ -182,15 +203,39 @@ Schema:
   "visual_style_descriptor": "...",
   "scenes": [
     {{
-      "scene": 1, "duration_sec": 8,
+      "scene": 1,
+      "duration_sec": 8,
+      "visual_description": "...",
+      "caption_text": "...",
+      "caption_text_en": "...",
+      "audio_mood": "upbeat [genre], [energy], with [ambient sounds]"
+    }},
+    {{
+      "scene": 2,
+      "duration_sec": 7,
       "visual_description": "...",
       "caption_text": "...",
       "caption_text_en": "...",
       "audio_mood": "..."
     }},
-    ...
+    {{
+      "scene": 3,
+      "duration_sec": 7,
+      "visual_description": "...",
+      "caption_text": "...",
+      "caption_text_en": "...",
+      "audio_mood": "..."
+    }},
+    {{
+      "scene": 4,
+      "duration_sec": 7,
+      "visual_description": "...",
+      "caption_text": "...",
+      "caption_text_en": "...",
+      "audio_mood": "..."
+    }}
   ],
-  "hashtags": ["#tag1"],
+  "hashtags": ["#tag1", "#tag2"],
   "full_caption": "..."
 }}"""
 

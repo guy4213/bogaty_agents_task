@@ -80,8 +80,8 @@ def _build_ass_content(
         "[V4+ Styles]\n"
         "Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, "
         "Bold, Alignment, MarginL, MarginR, MarginV, Encoding\n"
-        f"Style: Hebrew,Arial,{font_size},&H00FFFFFF,&H00000000,"
-        f"1,2,{margin_h},{margin_h},{margin_v},177\n\n"
+        f"Style: Hebrew,Arial,{font_size},&H00FFFFFF,&H00000000,&H00000000,&HAA000000,"
+        f"1,0,0,0,100,100,0,0,4,1,0,2,{margin_h},{margin_h},{margin_v},177\n\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
