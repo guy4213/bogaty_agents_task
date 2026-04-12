@@ -52,6 +52,7 @@ def _build_initial_state(
         generated_videos=[],
         current_video_ref=None,
         completed_extends=0,
+        all_video_refs=[],    # ← הוסף
         validation_results=[],
         retry_count=0,
         cost_accumulated=0.0,
@@ -296,7 +297,15 @@ async def _write_manifest(
         "assets": [a.model_dump() for a in assets],
     }
 
-    s3_key = f"tasks/{task_id}/manifest.json"
+   # ל:
+    if content_type == "comment":
+        root = "comments"
+    elif content_type in ("post", "story"):
+        root = "posts"
+    else:
+        root = "videos"
+
+    s3_key = f"{root}/{task_id}/manifest.json"
     await upload_json(s3_key, manifest)
     logger.info("[%s] Manifest uploaded: %s", task_id, s3_key)
     return s3_key

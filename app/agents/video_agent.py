@@ -33,23 +33,23 @@ def _build_initial_prompt(scene: dict, lang: str, visual_style: str = "") -> str
     )
 
 
-def _build_extend_prompt(scene: dict, lang: str, visual_style: str = "") -> str:
+def _build_extend_prompt(scene: dict, lang: str, visual_style: str = "", first_scene_visual: str = "") -> str:
     visual       = scene.get("visual_description", "")
     style_anchor = f" Maintain this exact visual style: {visual_style}." if visual_style else ""
+    anchor       = f" Reference scene 1: {first_scene_visual}." if first_scene_visual else ""
 
     if lang == "en":
         caption = scene.get("caption_text", "")
-        caption_instruction = (
-            f' Subtitle at bottom: "{caption}".'
-            if caption else ""
-        )
+        caption_instruction = f' Subtitle at bottom: "{caption}".' if caption else ""
     else:
         caption_instruction = " No text overlays."
 
     return (
-        f"Continue seamlessly: {visual}.{style_anchor}"
+        f"Continue seamlessly: {visual}.{style_anchor}{anchor} "
+        f"CRITICAL — FORBIDDEN: No bananas, no unrelated food, no new ingredients. "
+        f"ONLY the exact same ingredients and kitchen from scene 1. "
+        f"SAME kitchen, SAME lighting, SAME food."
         f"{caption_instruction} "
-        f"SAME ingredients, SAME kitchen, SAME lighting."
     )
 
 async def run(state: ContentEngineState) -> dict:
@@ -77,13 +77,14 @@ async def run(state: ContentEngineState) -> dict:
         raise ValueError("No scene data available for video generation")
 
     required_extends = len(scenes) - 1  # 4 scenes = 3 extends = 29s
+    first_scene_visual = scenes[0].get("visual_description", "")
 
     # ------------------------------------------------------------------
     # Tier 3: Resume from checkpoint if partial work was done
     # ------------------------------------------------------------------
     current_video_ref: str | None = state.get("current_video_ref")
     completed_extends: int        = state.get("completed_extends", 0)
-
+    all_video_refs: list[str]      = state.get("all_video_refs", [])
     if current_video_ref:
         logger.info(
             "[%s] VideoAgent: RESUMING checkpoint — ref=%s extends=%d/%d",
@@ -98,6 +99,7 @@ async def run(state: ContentEngineState) -> dict:
         initial_prompt    = _build_initial_prompt(scenes[0], lang, visual_style)
         current_video_ref = await generate_video_initial(initial_prompt)
         completed_extends = 0
+        all_video_refs    = [current_video_ref]    
         logger.info("[%s] VideoAgent: initial clip ready — ref=%s", task_id, current_video_ref)
 
     # ------------------------------------------------------------------
@@ -105,8 +107,7 @@ async def run(state: ContentEngineState) -> dict:
     # ------------------------------------------------------------------
     for extend_idx in range(completed_extends, required_extends):
         scene         = scenes[extend_idx + 1]
-        extend_prompt = _build_extend_prompt(scene, lang, visual_style)
-
+        extend_prompt = _build_extend_prompt(scene, lang, visual_style, first_scene_visual)
         logger.info(
             "[%s] VideoAgent: extend %d/%d scene=%d caption_en='%s'",
             task_id, extend_idx + 1, required_extends,
@@ -121,9 +122,10 @@ async def run(state: ContentEngineState) -> dict:
                 extend_index=extend_idx,
             )
             completed_extends = extend_idx + 1
+            all_video_refs.append(current_video_ref)
             logger.info(
-                "[%s] VideoAgent: extend %d done — ref=%s",
-                task_id, completed_extends, current_video_ref,
+                "[%s] VideoAgent: extend %d done — ref=%s total_refs=%d",
+                task_id, completed_extends, current_video_ref, len(all_video_refs),
             )
         except Exception as exc:
             logger.error(
@@ -135,13 +137,24 @@ async def run(state: ContentEngineState) -> dict:
                 str(exc),
                 current_video_ref=current_video_ref,
                 completed_extends=completed_extends,
+                all_video_refs=all_video_refs,
             ) from exc
 
     # ------------------------------------------------------------------
     # Step 3: Download final video from GCS
     # ------------------------------------------------------------------
-    logger.info("[%s] VideoAgent: downloading final video", task_id)
-    video_bytes    = await download_video(current_video_ref)
+    logger.info("[%s] VideoAgent: merging %d clips from GCS", task_id, len(all_video_refs))
+    if get_settings().dry_run:
+        from app.mocks.mock_clients import mock_download_video
+        video_bytes = await mock_download_video(all_video_refs[-1])
+    else:
+        from app.services.caption_service import download_and_merge_clips
+        video_bytes = await download_and_merge_clips(
+            gcs_uris=all_video_refs,
+            project_id=cfg.vertex_project_id,
+            initial_duration=cfg.veo_initial_duration_sec,
+            extend_duration=cfg.veo_extend_duration_sec,
+        )
     total_duration = cfg.veo_initial_duration_sec + required_extends * cfg.veo_extend_duration_sec
 
     # ------------------------------------------------------------------
@@ -205,12 +218,14 @@ async def run(state: ContentEngineState) -> dict:
         "generated_videos":  state.get("generated_videos", []) + [video_record],
         "current_video_ref": current_video_ref,
         "completed_extends": completed_extends,
+        "all_video_refs":    all_video_refs,
         "cost_accumulated":  state.get("cost_accumulated", 0.0) + veo_cost,
     }
 
 
 class _PartialVideoError(Exception):
-    def __init__(self, message: str, current_video_ref: str, completed_extends: int):
+    def __init__(self, message: str, current_video_ref: str, completed_extends: int, all_video_refs: list[str] | None = None):
         super().__init__(message)
         self.current_video_ref = current_video_ref
         self.completed_extends = completed_extends
+        self.all_video_refs    = all_video_refs or []

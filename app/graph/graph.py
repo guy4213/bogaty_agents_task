@@ -34,8 +34,17 @@ async def _content_validator_node(state: ContentEngineState) -> dict:
 def _route_after_orchestrator(state: ContentEngineState) -> Literal["content_agent"]:
     return "content_agent"
 
-def _route_after_content_agent(state: ContentEngineState) -> Literal["image_agent", "content_validator"]:
-    return "content_validator" if state.get("pipeline_type", "text_only") == "text_only" else "image_agent"
+def _route_after_content_agent(state) -> Literal["image_agent", "content_validator"]:
+    pipeline = state.get("pipeline_type", "text_only")
+    is_retry = state.get("retry_count", 0) > 0
+    has_images = bool(state.get("generated_images"))
+
+    if pipeline == "text_only":
+        return "content_validator"
+    # בretry כשכבר יש תמונות — דלג על Image Agent
+    if is_retry and has_images and pipeline == "text_image":
+        return "content_validator"
+    return "image_agent"
 
 def _route_after_image_agent(state: ContentEngineState) -> Literal["video_agent", "content_validator"]:
     return "video_agent" if state.get("pipeline_type") == "full_video" else "content_validator"

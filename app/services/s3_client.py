@@ -87,4 +87,14 @@ async def presigned_url(key: str, expiry_sec: int = 3600) -> str:
 
 
 def asset_key(task_id: str, platform: str, content_type: str, item_index: int, filename: str) -> str:
-    return f"tasks/{task_id}/{platform}/{content_type}/item_{item_index}/{filename}"
+    # קבץ לפי סוג תוכן
+    if content_type == "comment":
+        root = "comments"
+    elif content_type in ("post", "story"):
+        root = "posts"
+    elif content_type in ("reels",):
+        root = "videos"
+    else:
+        root = "other"
+
+    return f"{root}/{task_id}/{platform}/item_{item_index}/{filename}"

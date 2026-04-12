@@ -52,6 +52,70 @@ CAPTION_ANGLES = [
 # Prompt builders
 # ---------------------------------------------------------------------------
 
+def _build_comments_retry_prompt(state: ContentEngineState, failed_items: list[dict]) -> str:
+    lang        = state["language"]
+    desc        = state["description"]
+    platform    = state["platform"]
+    failed_indices = [item.get("item_id") for item in failed_items]
+    failed_count   = len(failed_indices)
+
+    lang_instruction = (
+        "Write ALL comments in Hebrew. Natural, conversational Israeli Hebrew only."
+        if lang == "he"
+        else "Write ALL comments in English. Natural, conversational language only."
+    )
+
+    personas = [
+        "food_blogger", "home_cook", "nutrition_enthusiast", "skeptical_commenter",
+        "cooking_beginner", "professional_chef", "busy_parent", "student_budget",
+        "food_photographer", "diet_conscious",
+    ]
+
+    # בנה רשימת הפרסונות לפריטים שנכשלו
+    failed_personas = []
+    for idx in failed_indices:
+        if idx is not None:
+            persona = personas[idx % len(personas)]
+            failed_personas.append(f"index {idx}: persona={persona}")
+
+    failed_list = "\n".join(f"  - {p}" for p in failed_personas)
+
+    feedback_items = []
+    for item in failed_items:
+        idx   = item.get("item_id")
+        score = item.get("score", 0)
+        errors = item.get("errors", [])
+        if errors:
+            feedback_items.append(f"  - index {idx}: score={score}, issues={errors}")
+
+    feedback_str = "\n".join(feedback_items) if feedback_items else "  - Score too low, sounded unnatural or AI-generated"
+
+    return f"""You previously generated {state.get('quantity', 50)} Instagram comments about: "{desc}"
+
+The following {failed_count} comments FAILED quality validation and must be regenerated:
+{failed_list}
+
+Failure reasons:
+{feedback_str}
+
+{lang_instruction}
+
+REGENERATE ONLY these {failed_count} comments. Use the SAME index numbers as above.
+Each comment must:
+- Sound like a real person wrote it spontaneously
+- Match the persona naturally (not robotically)
+- Be relevant to: "{desc}"
+- Be unique — different from all other comments in the batch
+- NOT sound AI-generated or overly enthusiastic
+
+Platform: {platform}
+
+Return ONLY a valid JSON array with exactly {failed_count} items. No preamble, no markdown.
+Schema:
+[
+  {{"index": <original_index>, "text": "...", "persona": "<persona_name>"}},
+  ...
+]"""
 def _build_comments_prompt(state: ContentEngineState) -> str:
     """All N comments in one single Claude call — unchanged."""
     quantity = state["quantity"]
@@ -279,15 +343,24 @@ async def run(state: ContentEngineState) -> dict:
                 f"\n\nPrevious attempt rejected: {vr['retry_feedback']}. Fix these issues."
             )
             break
+    system = "You are an expert social media copywriter. Output ONLY valid JSON."
 
     if content_type == "comment":
-        prompt = _build_comments_prompt(state) + retry_feedback
-        system = "You are an expert social media copywriter. Output ONLY valid JSON."
+        failed_items = [
+            vr for vr in state.get("validation_results", [])
+            if not vr.get("passed")
+        ]
+        if failed_items and state.get("retry_count", 0) > 0:
+            # retry — ייצר רק את הכושלים
+            prompt = _build_comments_retry_prompt(state, failed_items)
+        else:
+            # ריצה ראשונה — ייצר הכל
+            prompt = _build_comments_prompt(state)
+        prompt += retry_feedback
     elif content_type == "reels":
         prompt = _build_reels_script_prompt(state) + retry_feedback
         system = "You are an expert video script writer. Output ONLY valid JSON."
     else:
-        # FIX: ONE caption per item, angle driven by item_index
         prompt = _build_single_caption_prompt(state) + retry_feedback
         system = "You are an expert social media copywriter. Output ONLY valid JSON."
 
@@ -311,11 +384,28 @@ async def run(state: ContentEngineState) -> dict:
     # Normalise → flat list
     if isinstance(parsed, dict):
         if content_type in ("post", "story") and "captions" in parsed:
-            items = parsed["captions"]   # always length 1 after the fix
+            items = parsed["captions"]
         else:
             items = [parsed]
     else:
-        items = parsed  # already a list (comments)
+        items = parsed
+
+    # במקרה של retry לcomments — מזג את התגובות החדשות עם הישנות
+    if content_type == "comment" and state.get("retry_count", 0) > 0:
+        existing = state.get("generated_texts", [])
+        if existing and isinstance(items, list):
+            # בנה dict מהקיימים
+            merged = {item.get("index", i): item for i, item in enumerate(existing)}
+            # החלף רק את הכושלים
+            for new_item in items:
+                idx = new_item.get("index")
+                if idx is not None:
+                    merged[idx] = new_item
+            items = [merged[k] for k in sorted(merged.keys())]
+            logger.info(
+                "[%s] ContentAgent: merged retry — total=%d",
+                task_id, len(items),
+            )
 
     s3_key = asset_key(task_id, platform, content_type, item_index, "content.json")
     await upload_json(s3_key, items)
@@ -324,16 +414,16 @@ async def run(state: ContentEngineState) -> dict:
         "[%s] ContentAgent: item_%d generated %d item(s) cost=$%.4f",
         task_id, item_index, len(items), cost,
     )
-
+  
+    is_retry = state.get("retry_count", 0) > 0
     updates: dict = {
         "generated_texts": items,
         "cost_accumulated": state.get("cost_accumulated", 0.0) + cost,
-        # FIX: clear downstream artefacts so image/video agents start fresh on
-        # every content_agent call (including retries after validation failure).
-        "generated_images":  [],
+        "generated_images":  state.get("generated_images", []) if is_retry and content_type in ("post", "story") else [],
         "generated_videos":  [],
         "current_video_ref": None,
         "completed_extends": 0,
+        "all_video_refs":  [],
     }
 
     # visual_style_descriptor: first item sets the anchor; subsequent items keep

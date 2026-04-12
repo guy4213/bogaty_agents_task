@@ -28,6 +28,7 @@ class ContentEngineState(TypedDict):
     # Video Agent node-level checkpoint (Tier 3)
     current_video_ref: Optional[str]
     completed_extends: int
+    all_video_refs: list[str]    # ← הוסף
 
     # Content Validator
     validation_results: list[dict]

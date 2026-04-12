@@ -114,7 +114,7 @@ async def _generate_with_reference(
     visual_style_descriptor: str,
 ) -> bytes:
     import google.genai.types as types
-    client = _get_client()
+    client = _get_vertex_client()  # ← Vertex AI נדרש ל-edit_image
 
     style_desc = visual_style_descriptor or "preserve exact visual style, lighting, color palette, and mood"
 
