@@ -17,13 +17,15 @@ _LOCAL_S3_ROOT = pathlib.Path("/tmp/content-engine-dry-run")
 class MockClaudeMessage:
     def __init__(self, text: str):
         self.content = [type("Block", (), {"text": text})()]
-        self.usage = type("Usage", (), {"input_tokens": 500, "output_tokens": 300})()
+        self.usage   = type("Usage", (), {"input_tokens": 500, "output_tokens": 300})()
 
 
 def _make_comments(quantity: int, lang: str) -> str:
-    personas = ["food_blogger","home_cook","nutrition_enthusiast","skeptical_commenter",
-                "cooking_beginner","professional_chef","busy_parent","student_budget",
-                "food_photographer","diet_conscious"]
+    personas = [
+        "food_blogger", "home_cook", "nutrition_enthusiast", "skeptical_commenter",
+        "cooking_beginner", "professional_chef", "busy_parent", "student_budget",
+        "food_photographer", "diet_conscious",
+    ]
     texts_he = [
         "וואו, זה נראה מדהים! חייבת לנסות את המתכון הזה.",
         "פסטה מושלמת! כזו שאי אפשר לעצור לאכול.",
@@ -62,65 +64,138 @@ def _make_comments(quantity: int, lang: str) -> str:
 
     return json.dumps([
         {
-            "index": idx,
-            "text": texts[idx % len(texts)],   # ← כל תגובה שונה
+            "index":   idx,
+            "text":    texts[idx % len(texts)],
             "persona": personas[idx % len(personas)],
         }
         for idx in range(quantity)
     ])
 
-def _make_captions(quantity: int, lang: str, platform: str) -> str:
+
+def _make_single_caption(item_index: int, lang: str, platform: str) -> str:
+    """
+    FIX: returns ONE caption for the given item_index angle.
+    Previously _make_captions() returned `quantity` captions and the
+    image_agent always used index 0 → all items got the same angle.
+    """
+    angles   = [
+        "restaurant ambiance and atmosphere",
+        "close-up of the dish and ingredients",
+        "the overall dining experience and mood",
+        "behind-the-scenes / preparation story",
+        "personal connection / why this meal matters",
+    ]
     texts_he = [
         "ארוחת ערב מושלמת במסעדה שמביאה אותך חזרה לאיטליה.",
         "פסטה ביתית עם רוטב עגבניות טרי — פשוט אבל מושלם.",
         "חוויה קולינרית שכדאי לחזור אליה שוב ושוב.",
+        "מאחורי הקלעים: כך נולדת המנה המושלמת.",
+        "כל ביס מזכיר לי ארוחות משפחתיות של פעם.",
     ]
     texts_en = [
         "A perfect dinner that takes you straight back to Italy.",
         "Handmade pasta with fresh tomato sauce — simple but perfect.",
         "A culinary experience worth coming back to again and again.",
+        "Behind the scenes: how the perfect dish was born.",
+        "Every bite reminds me of family dinners growing up.",
     ]
-    texts = texts_he if lang == "he" else texts_en
-    angles = ["restaurant ambiance", "close-up dish", "dining experience"]
+    texts    = texts_he if lang == "he" else texts_en
     hashtags = ["#pasta", "#italianfood", "#foodphotography", "#restaurant", "#foodie"]
+
     return json.dumps({
-        "visual_style_descriptor": "Warm candlelit tones, rich ochre palette, shallow DOF close-up, intimate mood.",
+        "visual_style_descriptor": (
+            "Warm candlelit tones, rich ochre palette, shallow DOF close-up, intimate mood."
+        ),
         "captions": [
-            {"index": i, "text": texts[i % len(texts)], "hashtags": hashtags, "angle": angles[i % len(angles)]}
-            for i in range(quantity)
+            {
+                "index":    0,
+                "text":     texts[item_index % len(texts)],
+                "hashtags": hashtags,
+                "angle":    angles[item_index % len(angles)],
+            }
         ],
     })
 
 
 def _make_reel_script(lang: str) -> str:
+    # FIX: every scene now includes caption_text_en for Veo rendering
     if lang == "he":
         scenes = [
-            {"scene": 1, "duration_sec": 8, "visual_description": "ידיים קוצצות עגבניות טריות על לוח עץ", "caption_text": "מרכיבים טריים בלבד", "audio_mood": "אווירה רגועה של מטבח"},
-            {"scene": 2, "duration_sec": 7, "visual_description": "פסטה מתבשלת בסיר עם קיטור עולה", "caption_text": "מבשלים עם אהבה", "audio_mood": "צלילי מטבח"},
-            {"scene": 3, "duration_sec": 7, "visual_description": "הגשת הפסטה על צלחת לבנה עם ריחן", "caption_text": "פרזנטציה מושלמת", "audio_mood": "מוזיקה עדינה"},
-            {"scene": 4, "duration_sec": 7, "visual_description": "צילום תקריב של המנה המוגמרת", "caption_text": "תנסו בבית!", "audio_mood": "מוזיקה עליזה"},
+            {
+                "scene": 1, "duration_sec": 8,
+                "visual_description": "ידיים קוצצות עגבניות טריות על לוח עץ",
+                "caption_text":    "מרכיבים טריים בלבד",
+                "caption_text_en": "Fresh ingredients only",   # ← FIX
+                "audio_mood": "אווירה רגועה של מטבח",
+            },
+            {
+                "scene": 2, "duration_sec": 7,
+                "visual_description": "פסטה מתבשלת בסיר עם קיטור עולה",
+                "caption_text":    "מבשלים עם אהבה",
+                "caption_text_en": "Cooking with love",        # ← FIX
+                "audio_mood": "צלילי מטבח",
+            },
+            {
+                "scene": 3, "duration_sec": 7,
+                "visual_description": "הגשת הפסטה על צלחת לבנה עם ריחן",
+                "caption_text":    "פרזנטציה מושלמת",
+                "caption_text_en": "Perfect presentation",     # ← FIX
+                "audio_mood": "מוזיקה עדינה",
+            },
+            {
+                "scene": 4, "duration_sec": 7,
+                "visual_description": "צילום תקריב של המנה המוגמרת",
+                "caption_text":    "תנסו בבית!",
+                "caption_text_en": "Try this at home!",        # ← FIX
+                "audio_mood": "מוזיקה עליזה",
+            },
         ]
         caption = "פסטה ביתית שתשגע אתכם 🍝"
     else:
         scenes = [
-            {"scene": 1, "duration_sec": 8, "visual_description": "Hands chopping fresh tomatoes on a wooden board", "caption_text": "Fresh ingredients only", "audio_mood": "Calm kitchen ambience"},
-            {"scene": 2, "duration_sec": 7, "visual_description": "Pasta boiling in pot with rising steam", "caption_text": "Cooking with love", "audio_mood": "Kitchen sounds"},
-            {"scene": 3, "duration_sec": 7, "visual_description": "Plating pasta on white dish with basil", "caption_text": "Perfect presentation", "audio_mood": "Soft music"},
-            {"scene": 4, "duration_sec": 7, "visual_description": "Close-up beauty shot of finished dish", "caption_text": "Try this at home!", "audio_mood": "Upbeat music"},
+            {
+                "scene": 1, "duration_sec": 8,
+                "visual_description": "Hands chopping fresh tomatoes on a wooden board",
+                "caption_text":    "Fresh ingredients only",
+                "caption_text_en": "Fresh ingredients only",
+                "audio_mood": "Calm kitchen ambience",
+            },
+            {
+                "scene": 2, "duration_sec": 7,
+                "visual_description": "Pasta boiling in pot with rising steam",
+                "caption_text":    "Cooking with love",
+                "caption_text_en": "Cooking with love",
+                "audio_mood": "Kitchen sounds",
+            },
+            {
+                "scene": 3, "duration_sec": 7,
+                "visual_description": "Plating pasta on white dish with basil",
+                "caption_text":    "Perfect presentation",
+                "caption_text_en": "Perfect presentation",
+                "audio_mood": "Soft music",
+            },
+            {
+                "scene": 4, "duration_sec": 7,
+                "visual_description": "Close-up beauty shot of finished dish",
+                "caption_text":    "Try this at home!",
+                "caption_text_en": "Try this at home!",
+                "audio_mood": "Upbeat music",
+            },
         ]
         caption = "Homemade pasta that will blow your mind 🍝"
+
     return json.dumps({
-        "index": 0,
+        "index":                   0,
         "visual_style_descriptor": "Warm golden-hour tones, steam rising close-ups, slow push-in camera, vibrant appetizing mood.",
-        "scenes": scenes,
-        "hashtags": ["#pasta", "#homecooking", "#reels", "#foodvideo"],
-        "full_caption": caption,
+        "scenes":                  scenes,
+        "hashtags":                ["#pasta", "#homecooking", "#reels", "#foodvideo"],
+        "full_caption":            caption,
     })
 
 
 async def mock_claude_complete(messages: list, system: str = "", max_tokens: int = 4096):
     prompt = messages[-1]["content"] if messages else ""
-    lang = "he" if "Hebrew" in prompt else "en"
+    lang   = "he" if "Hebrew" in prompt else "en"
 
     if "comment" in prompt.lower():
         quantity = 3
@@ -136,11 +211,12 @@ async def mock_claude_complete(messages: list, system: str = "", max_tokens: int
         text = _make_reel_script(lang)
 
     elif "caption" in prompt.lower():
-        quantity = 3
+        # FIX: extract item_index from prompt so each mock returns the right angle
+        item_index = 0
         for line in prompt.split("\n"):
-            if "Generate exactly" in line:
+            if "item_index:" in line.lower():
                 try:
-                    quantity = int(line.split("Generate exactly")[1].split()[0])
+                    item_index = int(line.split(":")[1].strip())
                 except Exception:
                     pass
         platform = "instagram"
@@ -148,9 +224,14 @@ async def mock_claude_complete(messages: list, system: str = "", max_tokens: int
             if p in prompt.lower():
                 platform = p
                 break
-        text = _make_captions(quantity, lang, platform)
+        text = _make_single_caption(item_index, lang, platform)
 
     elif "evaluate" in prompt.lower() or "score" in prompt.lower():
+        text = json.dumps({
+            "scores": [],  # batch format — see content_validator.py
+            "overall_feedback": "Content looks natural and on-brand.",
+        })
+        # fallback for legacy single-item evaluate calls
         text = json.dumps({"score": 8, "issues": [], "feedback": "Content looks natural and on-brand."})
 
     else:
@@ -166,11 +247,13 @@ async def mock_claude_complete(messages: list, system: str = "", max_tokens: int
 
 def _make_png() -> bytes:
     def chunk(t: bytes, d: bytes) -> bytes:
-        import struct, zlib
-        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
-    sig = b"\x89PNG\r\n\x1a\n"
+        return (
+            struct.pack(">I", len(d)) + t + d
+            + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+        )
+    sig  = b"\x89PNG\r\n\x1a\n"
     ihdr = chunk(b"IHDR", struct.pack(">IIBBBBB", 8, 8, 8, 2, 0, 0, 0))
-    raw = b"".join(b"\x00" + b"\xFF\x80\x20" * 8 for _ in range(8))
+    raw  = b"".join(b"\x00" + b"\xFF\x80\x20" * 8 for _ in range(8))
     idat = chunk(b"IDAT", zlib.compress(raw))
     iend = chunk(b"IEND", b"")
     return sig + ihdr + idat + iend
@@ -182,7 +265,10 @@ async def mock_generate_image(
     style_reference_bytes: bytes | None = None,
     visual_style_descriptor: str = "",
 ) -> bytes:
-    logger.info("[DRY_RUN] MockImage ratio=%s has_ref=%s", aspect_ratio, style_reference_bytes is not None)
+    logger.info(
+        "[DRY_RUN] MockImage ratio=%s has_ref=%s",
+        aspect_ratio, style_reference_bytes is not None,
+    )
     return _make_png()
 
 

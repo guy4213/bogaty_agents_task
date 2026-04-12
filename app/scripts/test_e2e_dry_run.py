@@ -22,29 +22,35 @@ import logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 
 LOCAL_S3 = pathlib.Path("/tmp/content-engine-dry-run")
-P, F, W = "✅", "❌", "⚠️ "
+P, F, W  = "✅", "❌", "⚠️ "
 
 SCENARIOS = {
     1: {
-        "name": "50 Instagram Comments in Hebrew",
-        "platform": "instagram", "content_type": "comment",
-        "language": "he", "quantity": 5,
-        "description": "pasta recipe excitement",
-        "pipeline": "text_only",
+        "name":         "50 Instagram Comments in Hebrew",
+        "platform":     "instagram",
+        "content_type": "comment",
+        "language":     "he",
+        "quantity":     5,
+        "description":  "pasta recipe excitement",
+        "pipeline":     "text_only",
     },
     2: {
-        "name": "3 TikTok Reels in Hebrew",
-        "platform": "tiktok", "content_type": "reels",
-        "language": "he", "quantity": 2,
-        "description": "quick pasta preparation process",
-        "pipeline": "full_video",
+        "name":         "3 TikTok Reels in Hebrew",
+        "platform":     "tiktok",
+        "content_type": "reels",
+        "language":     "he",
+        "quantity":     2,
+        "description":  "quick pasta preparation process",
+        "pipeline":     "full_video",
     },
     3: {
-        "name": "3 Instagram Posts in English",
-        "platform": "instagram", "content_type": "post",
-        "language": "en", "quantity": 2,
-        "description": "restaurant visit, pasta dish",
-        "pipeline": "text_image",
+        "name":         "3 Instagram Posts in English",
+        "platform":     "instagram",
+        "content_type": "post",
+        "language":     "en",
+        "quantity":     2,
+        "description":  "restaurant visit, pasta dish",
+        "pipeline":     "text_image",
     },
 }
 
@@ -107,30 +113,60 @@ async def run_scenario(num: int) -> bool:
     ok &= chk("manifest.json exists", manifest_path.exists())
 
     if manifest_path.exists():
-        m = json.loads(manifest_path.read_text())
+        m = json.loads(manifest_path.read_text(encoding="utf-8"))
         ok &= chk("status=completed", m.get("status") == "completed", m.get("status"))
         ok &= chk(f"quantity_requested={s['quantity']}", m.get("quantity_requested") == s["quantity"])
-        ok &= chk("assets list present", bool(m.get("assets")), f"count={len(m.get('assets',[]))}")
+        ok &= chk("assets list present", bool(m.get("assets")), f"count={len(m.get('assets', []))}")
         ok &= chk("cost_saved_by_checkpoint present", "cost_saved_by_checkpoint" in m)
         ok &= chk("failed_items present", "failed_items" in m)
 
     ct = s["content_type"]
-    for i in range(s["quantity"]):
-        item_dir = task_dir / s["platform"] / ct / f"item_{i}"
-        if not item_dir.exists():
-            ok &= chk(f"item_{i} dir exists", False); continue
-        files = [f.name for f in item_dir.iterdir()]
-        if ct == "comment":
-            ok &= chk(f"item_{i} content.json", "content.json" in files)
-        elif ct in ("post", "story"):
-            ok &= chk(f"item_{i} image.png", "image.png" in files)
-            ok &= chk(f"item_{i} caption.txt", "caption.txt" in files)
-        elif ct == "reels":
-            ok &= chk(f"item_{i} video.mp4", "video.mp4" in files)
-            ok &= chk(f"item_{i} thumbnail.png", "thumbnail.png" in files)
-            ok &= chk(f"item_{i} script.txt", "script.txt" in files)
 
-    print(f"\n  Output:")
+    if ct == "comment":
+        # FIX: comments pipeline (text_only) puts ALL items into item_0/content.json
+        # in a single batch call. We must NOT check for item_1..item_N directories.
+        item_dir = task_dir / s["platform"] / ct / "item_0"
+        ok &= chk("item_0 dir exists", item_dir.exists())
+        if item_dir.exists():
+            files = [f.name for f in item_dir.iterdir()]
+            ok &= chk("item_0/content.json exists", "content.json" in files)
+            # Validate the batch JSON contains quantity items
+            content_file = item_dir / "content.json"
+            if content_file.exists():
+                batch = json.loads(content_file.read_text(encoding="utf-8"))
+                ok &= chk(
+                    f"content.json contains {s['quantity']} comments",
+                    len(batch) == s["quantity"],
+                    f"got {len(batch)}",
+                )
+    else:
+        # post / story / reels: one directory per item
+        for i in range(s["quantity"]):
+            item_dir = task_dir / s["platform"] / ct / f"item_{i}"
+            if not item_dir.exists():
+                ok &= chk(f"item_{i} dir exists", False)
+                continue
+            files = [f.name for f in item_dir.iterdir()]
+            if ct in ("post", "story"):
+                ok &= chk(f"item_{i}/image.png",   "image.png"   in files)
+                ok &= chk(f"item_{i}/caption.txt", "caption.txt" in files)
+            elif ct == "reels":
+                ok &= chk(f"item_{i}/video.mp4",      "video.mp4"      in files)
+                ok &= chk(f"item_{i}/thumbnail.png",  "thumbnail.png"  in files)
+                ok &= chk(f"item_{i}/script.txt",     "script.txt"     in files)
+                # FIX: verify script contains caption_text_en lines (not empty)
+                script_file = item_dir / "script.txt"
+                if script_file.exists():
+                    script_content = script_file.read_text(encoding="utf-8")
+                    has_en_captions = "Caption (EN):" in script_content and \
+                                      any(
+                                          line.split("Caption (EN):")[-1].strip()
+                                          for line in script_content.splitlines()
+                                          if "Caption (EN):" in line
+                                      )
+                    ok &= chk(f"item_{i}/script.txt has EN captions", has_en_captions)
+
+    print(f"\n  Output tree:")
     tree(task_dir, "    ")
     return ok
 

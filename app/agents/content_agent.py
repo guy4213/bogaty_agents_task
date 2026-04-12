@@ -29,27 +29,34 @@ ENTHUSIASM_LEVELS = [
     "warmly supportive", "humorously enthusiastic",
 ]
 
-CAPTION_LIMITS = {
+CAPTION_LIMITS  = {
     "instagram": 2200, "tiktok": 2200, "twitter": 280,
-    "telegram": 4096, "facebook": 63206,
+    "telegram": 4096,  "facebook": 63206,
+}
+HASHTAG_LIMITS  = {
+    "instagram": 30, "tiktok": 30, "twitter": 5,
+    "telegram": 0,   "facebook": 10,
 }
 
-HASHTAG_LIMITS = {
-    "instagram": 30, "tiktok": 30, "twitter": 5,
-    "telegram": 0, "facebook": 10,
-}
+# Angles list shared with mock so both pick the same angle for a given item_index
+CAPTION_ANGLES = [
+    "restaurant ambiance and atmosphere",
+    "close-up of the dish and ingredients",
+    "the overall dining experience and mood",
+    "behind-the-scenes / preparation story",
+    "personal connection / why this meal matters",
+]
 
 
 # ---------------------------------------------------------------------------
 # Prompt builders
 # ---------------------------------------------------------------------------
 
-
-
 def _build_comments_prompt(state: ContentEngineState) -> str:
+    """All N comments in one single Claude call — unchanged."""
     quantity = state["quantity"]
-    lang = state["language"]
-    desc = state["description"]
+    lang     = state["language"]
+    desc     = state["description"]
 
     persona_assignments = []
     for idx in range(quantity):
@@ -58,7 +65,7 @@ def _build_comments_prompt(state: ContentEngineState) -> str:
         persona_assignments.append(
             f"  Comment {idx + 1}: persona={persona_name} ({persona_desc}), tone={enthusiasm}"
         )
-    persona_block = "\n".join(persona_assignments)
+    persona_block    = "\n".join(persona_assignments)
     lang_instruction = (
         "Write all comments in Hebrew (rtl, natural colloquial Hebrew)."
         if lang == "he" else "Write all comments in English."
@@ -82,56 +89,60 @@ Return ONLY a valid JSON array with {quantity} objects. No preamble, no markdown
 Schema per object: {{"index": 0, "text": "...", "persona": "food_blogger"}}"""
 
 
-def _build_captions_prompt(state: ContentEngineState) -> str:
-    quantity = state["quantity"]
-    lang = state["language"]
-    desc = state["description"]
-    platform = state["platform"]
-    char_limit = CAPTION_LIMITS.get(platform, 2200)
+def _build_single_caption_prompt(state: ContentEngineState) -> str:
+    """
+    FIX: generates exactly ONE caption per item, using item_index to select
+    the angle. Previously the function generated `quantity` captions every
+    time and image_agent always used index 0 → all posts got the same angle.
+
+    Also: visual_style_descriptor is only requested on item 0 (it anchors
+    the style for all images via the style_reference_image mechanism).
+    """
+    item_index    = state["item_index"]
+    lang          = state["language"]
+    desc          = state["description"]
+    platform      = state["platform"]
+    char_limit    = CAPTION_LIMITS.get(platform, 2200)
     hashtag_limit = HASHTAG_LIMITS.get(platform, 20)
+    is_first_item = item_index == 0
+
     lang_instruction = (
-        "Write all captions in Hebrew." if lang == "he"
-        else "Write all captions in English."
+        "Write the caption in Hebrew." if lang == "he"
+        else "Write the caption in English."
     )
+    angle = CAPTION_ANGLES[item_index % len(CAPTION_ANGLES)]
 
-    angles = [
-        "restaurant ambiance and atmosphere",
-        "close-up of the dish and ingredients",
-        "the overall dining experience and mood",
-        "behind-the-scenes / preparation story",
-        "personal connection / why this meal matters",
-    ]
-    angle_block = "\n".join(
-        f"  Caption {i + 1}: angle={angles[i % len(angles)]}" for i in range(quantity)
-    )
+    # Only item 0 generates the visual_style_descriptor anchor.
+    # Items 1+ receive it via state from the runner.
+    style_section = """
+Also produce a "visual_style_descriptor" — one sentence (max 25 words) that locks
+the visual style for ALL images in this batch. Specify: lighting temperature,
+color palette, camera angle, depth of field, and mood.
+Example: "Warm candlelit tones, rich ochre palette, shallow DOF close-up, intimate romantic mood."
+""" if is_first_item else ""
 
-    return f"""Generate exactly {quantity} unique {platform} post captions about: "{desc}"
+    return f"""Generate exactly 1 {platform} post caption about: "{desc}"
+
+item_index: {item_index}
+Angle for this caption: {angle}
 
 {lang_instruction}
 
-Angle assignments:
-{angle_block}
-
 Rules:
-- Max {char_limit} characters per caption
-- Include {hashtag_limit} relevant hashtags per caption (inline at end)
+- Max {char_limit} characters
+- Include {hashtag_limit} relevant hashtags (inline at end)
 - Tone: authentic, engaging, platform-appropriate for {platform}
-- Each caption must have a distinct angle as assigned
-
-Also produce a single "visual_style_descriptor" — one sentence (max 25 words) that locks
-the visual style for ALL images in this batch. Specify: lighting temperature (warm/cool),
-color palette, camera angle, depth of field, and mood.
-Example: "Warm candlelit tones, rich ochre palette, shallow DOF close-up angle, intimate romantic mood, rustic plating."
-
+- Angle MUST be: {angle}
+{style_section}
 Return ONLY a valid JSON object. No preamble, no markdown fences.
 Schema:
 {{
   "visual_style_descriptor": "...",
   "captions": [
-    {{"index": 0, "text": "...", "hashtags": ["#tag1", "#tag2"], "angle": "..."}},
-    ...
+    {{"index": 0, "text": "...", "hashtags": ["#tag1", "#tag2"], "angle": "{angle}"}}
   ]
 }}"""
+
 
 def _build_reels_script_prompt(state: ContentEngineState) -> str:
     lang = state["language"]
@@ -156,31 +167,13 @@ Structure: exactly 4 scenes (8s + 7s + 7s + 7s = 29 seconds total)
 
 IMPORTANT: Veo video model cannot render RTL text correctly.
 For each scene you MUST provide TWO caption fields:
-- "caption_text": the caption in {("Hebrew" if lang == "he" else "English")} (for script.txt and S3 storage)
-- "caption_text_en": the caption translated to English (for Veo rendering — always English regardless of language)
+- "caption_text":    the caption in {("Hebrew" if lang == "he" else "English")} (for script.txt)
+- "caption_text_en": the English translation (for Veo rendering — always English)
 
-Also produce a single "visual_style_descriptor" — one sentence (max 25 words) that locks
-the visual style for ALL scenes and the thumbnail image. Specify: lighting temperature,
-color palette, camera movement style, and mood.
-Example: "Warm golden-hour tones, steam rising close-ups, slow push-in camera, vibrant appetizing mood."
+Also produce a "visual_style_descriptor" — one sentence (max 25 words) locking the
+visual style for ALL scenes and the thumbnail.
 
-CRITICAL — scenes must follow strict cooking chronology.
-The entire video tells ONE continuous story — same kitchen, same pot, same dish:
-- Scene 1: RAW ingredients only — pasta, tomatoes, basil laid out. Nothing cooked yet.
-- Scene 2: COOKING — the exact same pasta from scene 1 being boiled in a pot. Same ingredients, same kitchen.
-- Scene 3: PLATING — the exact same cooked pasta being plated. Continuous from scene 2.
-- Scene 4: FINAL beauty shot — the exact same plated dish from scene 3. No new ingredients.
-
-STRICTLY FORBIDDEN:
-- Do NOT introduce new ingredients not mentioned in the description
-- Do NOT change the food type between scenes
-- Do NOT show a different kitchen or setting
-- Each scene_description must reference the SAME specific ingredients and dish
-
-For each scene, the visual_description must be extremely specific and locked:
-- Name the exact ingredients (e.g. "fettuccine pasta and cherry tomatoes" not just "pasta")
-- Name the exact setting (e.g. "rustic wooden kitchen counter with marble surface")
-- Name the exact cooking vessel (e.g. "large silver pot with boiling water")
+CRITICAL: scenes must follow strict cooking chronology (same kitchen, pot, dish).
 
 Return ONLY a valid JSON object. No preamble, no markdown fences.
 Schema:
@@ -189,41 +182,18 @@ Schema:
   "visual_style_descriptor": "...",
   "scenes": [
     {{
-      "scene": 1,
-      "duration_sec": 8,
+      "scene": 1, "duration_sec": 8,
       "visual_description": "...",
       "caption_text": "...",
       "caption_text_en": "...",
       "audio_mood": "..."
     }},
-    {{
-      "scene": 2,
-      "duration_sec": 7,
-      "visual_description": "...",
-      "caption_text": "...",
-      "caption_text_en": "...",
-      "audio_mood": "..."
-    }},
-    {{
-      "scene": 3,
-      "duration_sec": 7,
-      "visual_description": "...",
-      "caption_text": "...",
-      "caption_text_en": "...",
-      "audio_mood": "..."
-    }},
-    {{
-      "scene": 4,
-      "duration_sec": 7,
-      "visual_description": "...",
-      "caption_text": "...",
-      "caption_text_en": "...",
-      "audio_mood": "..."
-    }}
+    ...
   ],
-  "hashtags": ["#tag1", "#tag2"],
+  "hashtags": ["#tag1"],
   "full_caption": "..."
 }}"""
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -234,8 +204,7 @@ def _extract_json(text: str) -> Any:
     return json.loads(cleaned)
 
 
-def _extract_visual_style(parsed: Any, content_type: str) -> str:
-    """Pull visual_style_descriptor out of parsed response."""
+def _extract_visual_style(parsed: Any) -> str:
     if isinstance(parsed, dict):
         return parsed.get("visual_style_descriptor", "")
     return ""
@@ -247,17 +216,24 @@ def _extract_visual_style(parsed: Any, content_type: str) -> str:
 
 async def run(state: ContentEngineState) -> dict:
     content_type = state["content_type"]
-    task_id = state["task_id"]
-    item_index = state["item_index"]
-    platform = state["platform"]
+    task_id      = state["task_id"]
+    item_index   = state["item_index"]
+    platform     = state["platform"]
+    retry_count  = state.get("retry_count", 0)
 
-    logger.info("[%s] ContentAgent: item_%d type=%s", task_id, item_index, content_type)
+    logger.info(
+        "[%s] ContentAgent: item_%d type=%s retry=%d",
+        task_id, item_index, content_type, retry_count,
+    )
 
-    # Inject retry feedback from validator if present
+    # Pull retry feedback from validator
     retry_feedback = ""
     for vr in state.get("validation_results", []):
         if vr.get("retry_feedback"):
-            retry_feedback = f"\n\nPrevious attempt was rejected: {vr['retry_feedback']}. Fix these issues."
+            retry_feedback = (
+                f"\n\nPrevious attempt rejected: {vr['retry_feedback']}. Fix these issues."
+            )
+            break
 
     if content_type == "comment":
         prompt = _build_comments_prompt(state) + retry_feedback
@@ -266,7 +242,8 @@ async def run(state: ContentEngineState) -> dict:
         prompt = _build_reels_script_prompt(state) + retry_feedback
         system = "You are an expert video script writer. Output ONLY valid JSON."
     else:
-        prompt = _build_captions_prompt(state) + retry_feedback
+        # FIX: ONE caption per item, angle driven by item_index
+        prompt = _build_single_caption_prompt(state) + retry_feedback
         system = "You are an expert social media copywriter. Output ONLY valid JSON."
 
     response = await complete(
@@ -275,7 +252,7 @@ async def run(state: ContentEngineState) -> dict:
         max_tokens=8192,
     )
 
-    cost = estimate_cost(response)
+    cost     = estimate_cost(response)
     raw_text = response.content[0].text
 
     try:
@@ -284,27 +261,19 @@ async def run(state: ContentEngineState) -> dict:
         logger.error("[%s] ContentAgent JSON parse error: %s\nRaw: %s", task_id, exc, raw_text[:500])
         raise
 
-    # Extract visual_style_descriptor before normalising to list
-    visual_style_descriptor = _extract_visual_style(parsed, content_type)
+    visual_style_descriptor = _extract_visual_style(parsed)
 
-    # Normalise: for captions the items live under "captions" key
+    # Normalise → flat list
     if isinstance(parsed, dict):
         if content_type in ("post", "story") and "captions" in parsed:
-            items = parsed["captions"]
+            items = parsed["captions"]   # always length 1 after the fix
         else:
             items = [parsed]
     else:
         items = parsed  # already a list (comments)
 
-    # Upload to S3
     s3_key = asset_key(task_id, platform, content_type, item_index, "content.json")
     await upload_json(s3_key, items)
-
-    if visual_style_descriptor:
-        logger.info(
-            "[%s] ContentAgent: item_%d visual_style_descriptor='%s'",
-            task_id, item_index, visual_style_descriptor,
-        )
 
     logger.info(
         "[%s] ContentAgent: item_%d generated %d item(s) cost=$%.4f",
@@ -314,9 +283,16 @@ async def run(state: ContentEngineState) -> dict:
     updates: dict = {
         "generated_texts": items,
         "cost_accumulated": state.get("cost_accumulated", 0.0) + cost,
+        # FIX: clear downstream artefacts so image/video agents start fresh on
+        # every content_agent call (including retries after validation failure).
+        "generated_images":  [],
+        "generated_videos":  [],
+        "current_video_ref": None,
+        "completed_extends": 0,
     }
 
-    # Persist style descriptor — first item wins, stays constant across the batch
+    # visual_style_descriptor: first item sets the anchor; subsequent items keep
+    # whatever is already in state (passed in from runner via style_reference_image).
     if visual_style_descriptor and not state.get("visual_style_descriptor"):
         updates["visual_style_descriptor"] = visual_style_descriptor
 

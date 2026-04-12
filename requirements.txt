@@ -27,3 +27,7 @@ python-dotenv>=1.0.1
 httpx>=0.28.1
 google-cloud-aiplatform>=1.60.0
 google-cloud-storage>=2.0.0
+# Video & Media Processing
+static-ffmpeg>=2.5.0  # מתקין את ה-binaries של ffmpeg אוטומטית
+ffmpeg-python>=0.2.0  # ממשק פייתון נוח לעבודה עם ffmpeg
+
