@@ -11,16 +11,18 @@ logger = logging.getLogger(__name__)
 
 def _build_initial_prompt(scene: dict, lang: str, visual_style: str = "") -> str:
     visual       = scene.get("visual_description", "")
-    # FIX: use caption_text_en (always English) — Veo cannot render RTL Hebrew
-    caption_en   = scene.get("caption_text_en", "")
     audio_mood   = scene.get("audio_mood", "ambient kitchen sounds")
     style_anchor = f" Visual style: {visual_style}." if visual_style else ""
 
-    # FIX: inject caption into prompt; only add instruction when caption exists
-    caption_instruction = (
-        f' Render burnt-in subtitle text at the bottom third of the frame: "{caption_en}".'
-        if caption_en else ""
-    )
+    if lang == "en":
+        caption = scene.get("caption_text", "")
+        caption_instruction = (
+            f' Render burnt-in subtitle text at the bottom of the frame: "{caption}".'
+            if caption else ""
+        )
+    else:
+        # עברית — Veo לא תומך RTL, FFmpeg יטפל בזה
+        caption_instruction = " No text overlays."
 
     return (
         f"{visual}.{style_anchor}"
@@ -28,29 +30,27 @@ def _build_initial_prompt(scene: dict, lang: str, visual_style: str = "") -> str
         f"Audio: {audio_mood}. "
         f"9:16 vertical format, 1080x1920, cinematic food videography, "
         f"warm lighting, professional grade."
-        # FIX: removed "No text overlays whatsoever" — it was blocking all captions
     )
 
 
 def _build_extend_prompt(scene: dict, lang: str, visual_style: str = "") -> str:
     visual       = scene.get("visual_description", "")
-    # FIX: same as above — always English for Veo
-    caption_en   = scene.get("caption_text_en", "")
-    style_anchor = (
-        f" Maintain this exact visual style: {visual_style}." if visual_style else ""
-    )
-    caption_instruction = (
-        f' Render burnt-in subtitle text at the bottom third of the frame: "{caption_en}".'
-        if caption_en else ""
-    )
+    style_anchor = f" Maintain this exact visual style: {visual_style}." if visual_style else ""
+
+    if lang == "en":
+        caption = scene.get("caption_text", "")
+        caption_instruction = (
+            f' Subtitle at bottom: "{caption}".'
+            if caption else ""
+        )
+    else:
+        caption_instruction = " No text overlays."
 
     return (
         f"Continue seamlessly: {visual}.{style_anchor}"
         f"{caption_instruction} "
         f"SAME ingredients, SAME kitchen, SAME lighting."
-        # FIX: removed "No text overlays whatsoever"
     )
-
 
 async def run(state: ContentEngineState) -> dict:
     """
@@ -101,7 +101,7 @@ async def run(state: ContentEngineState) -> dict:
         logger.info("[%s] VideoAgent: initial clip ready — ref=%s", task_id, current_video_ref)
 
     # ------------------------------------------------------------------
-    # Extend loop — checkpoint saved after each iteration
+    # Extend loop — Tier 3 checkpoint saved after each iteration
     # ------------------------------------------------------------------
     for extend_idx in range(completed_extends, required_extends):
         scene         = scenes[extend_idx + 1]
@@ -138,17 +138,41 @@ async def run(state: ContentEngineState) -> dict:
             ) from exc
 
     # ------------------------------------------------------------------
-    # Download final video → S3
+    # Step 3: Download final video from GCS
     # ------------------------------------------------------------------
     logger.info("[%s] VideoAgent: downloading final video", task_id)
     video_bytes    = await download_video(current_video_ref)
-    total_duration = (
-        cfg.veo_initial_duration_sec + required_extends * cfg.veo_extend_duration_sec
-    )
+    total_duration = cfg.veo_initial_duration_sec + required_extends * cfg.veo_extend_duration_sec
 
+    # ------------------------------------------------------------------
+    # Step 4: Burn Hebrew captions with FFmpeg (language=he only)
+    # ------------------------------------------------------------------
+    if lang == "he":
+        logger.info("[%s] VideoAgent: burning Hebrew captions with FFmpeg", task_id)
+        if get_settings().dry_run:
+            from app.mocks.mock_clients import mock_burn_hebrew_captions
+            video_bytes = await mock_burn_hebrew_captions(
+                video_bytes, scenes,
+                cfg.veo_initial_duration_sec,
+                cfg.veo_extend_duration_sec,
+            )
+        else:
+            from app.services.caption_service import burn_hebrew_captions
+            video_bytes = await burn_hebrew_captions(
+                video_bytes=video_bytes,
+                scenes=scenes,
+                initial_duration=cfg.veo_initial_duration_sec,
+                extend_duration=cfg.veo_extend_duration_sec,
+            )
+        logger.info("[%s] VideoAgent: captions done", task_id)
+
+    # ------------------------------------------------------------------
+    # Step 5: Upload final video to S3
+    # ------------------------------------------------------------------
     video_key = asset_key(task_id, platform, content_type, item_index, "video.mp4")
     await upload_bytes(video_key, video_bytes, content_type="video/mp4")
 
+    # Upload script — Hebrew captions preserved here
     script_text = "\n\n".join(
         f"Scene {s.get('scene', i+1)} ({s.get('duration_sec', 7)}s):\n"
         f"Visual: {s.get('visual_description', '')}\n"
@@ -161,13 +185,12 @@ async def run(state: ContentEngineState) -> dict:
 
     veo_cost = 0.50 + required_extends * 0.20
 
-    # FIX: has_captions is True only when caption_text_en exists in every scene
     has_captions = all(bool(s.get("caption_text_en")) for s in scenes)
 
     video_record = {
         "s3_key":           video_key,
         "duration_sec":     total_duration,
-        "has_captions":     has_captions,   # FIX: was always hardcoded True
+        "has_captions":     has_captions,
         "has_audio":        True,
         "scenes_completed": len(scenes),
         "format":           "mp4",

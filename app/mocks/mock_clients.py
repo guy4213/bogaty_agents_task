@@ -314,3 +314,12 @@ async def mock_upload_bytes(key: str, data: bytes, content_type: str = "") -> st
 
 async def mock_presigned_url(key: str, expiry_sec: int = 3600) -> str:
     return f"file://{_LOCAL_S3_ROOT / key}"
+async def mock_burn_hebrew_captions(
+    video_bytes: bytes,
+    scenes: list,
+    initial_duration: int,
+    extend_duration: int,
+) -> bytes:
+    """Mock FFmpeg caption burning — returns video bytes unchanged."""
+    logger.info("[DRY_RUN] MockFFmpeg: skipping Hebrew caption burn (%d bytes)", len(video_bytes))
+    return video_bytes
