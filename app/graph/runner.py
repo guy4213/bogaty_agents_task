@@ -62,6 +62,7 @@ def _build_initial_state(
     )
 
 
+
 async def _run_single_item(
     task_id: str,
     item_index: int,
@@ -72,11 +73,12 @@ async def _run_single_item(
     description: str,
     pipeline_type: PipelineType,
     style_reference_image: str | None,
-) -> dict[str, Any]:
-    graph = get_graph()
-    thread_id = f"{task_id}__item_{item_index}"
+    override_state: dict | None = None,   # ← חדש
+) -> dict:
+    graph  = get_graph()
+    config = {"configurable": {"thread_id": f"{task_id}__item_{item_index}"}}
 
-    initial_state = _build_initial_state(
+    initial_state = override_state or _build_initial_state(
         task_id=task_id,
         item_index=item_index,
         platform=platform,
@@ -88,21 +90,14 @@ async def _run_single_item(
         style_reference_image=style_reference_image,
     )
 
-    config = {"configurable": {"thread_id": thread_id}}
-
     logger.info(
         "[%s] item_%d: starting pipeline=%s thread=%s",
-        task_id, item_index, pipeline_type.value, thread_id,
+        task_id, item_index, pipeline_type.value,
+        f"{task_id}__item_{item_index}",
     )
 
     result = await graph.ainvoke(initial_state, config=config)
-
-    logger.info(
-        "[%s] item_%d: pipeline completed status=%s cost=%.4f",
-        task_id, item_index, result.get("status"), result.get("cost_accumulated", 0),
-    )
     return result
-
 
 async def run_batch(
     task_id: str,
@@ -133,11 +128,11 @@ async def run_batch(
             return
 
     failed_items: list[FailedItem] = []
-    all_assets: list[AssetRecord] = []
+    all_assets:   list[AssetRecord] = []
     style_reference_image: str | None = None
     total_cost = 0.0
     total_checkpoint_savings = 0.0
-    
+
     items_to_run = 1 if pipeline_type == PipelineType.text_only else quantity
 
     for i in range(items_to_run):
@@ -155,54 +150,136 @@ async def run_batch(
                 style_reference_image=style_reference_image,
             )
 
-            item_cost = result.get("cost_accumulated", 0.0)
-            total_cost += item_cost
-            await task_store.increment_cost(task_id, item_cost)
-
-            if result.get("style_reference_image") and not style_reference_image:
-                style_reference_image = result["style_reference_image"]
-                logger.info("[%s] Style reference set from item_%d: %s", task_id, i, style_reference_image)
-
-            for img in result.get("generated_images", []):
-                all_assets.append(AssetRecord(
-                    item_index=i,
-                    asset_type="image",
-                    s3_key=img.get("s3_key", ""),
-                    file_format=img.get("format", "png"),
-                    validation_passed=_item_passed_validation(result, i),
-                    generation_cost_usd=item_cost,
-                ))
-            for vid in result.get("generated_videos", []):
-                all_assets.append(AssetRecord(
-                    item_index=i,
-                    asset_type="video",
-                    s3_key=vid.get("s3_key", ""),
-                    file_format="mp4",
-                    validation_passed=_item_passed_validation(result, i),
-                    generation_cost_usd=item_cost,
-                ))
-            if result.get("generated_texts"):
-                all_assets.append(AssetRecord(
-                    item_index=i,
-                    asset_type="text",
-                    s3_key=f"tasks/{task_id}/{platform}/{content_type}/item_{i}/content.json",
-                    file_format="json",
-                    validation_passed=_item_passed_validation(result, i),
-                    generation_cost_usd=item_cost,
-                ))
-
-            await task_store.update(task_id, items_completed=i + 1 - len(failed_items))
-
         except Exception as exc:
-            logger.error("[%s] item_%d FAILED: %s", task_id, i, exc, exc_info=True)
-            failed_items.append(FailedItem(
-                index=i,
-                stage=_infer_failure_stage(exc),
-                error=str(exc),
-                retryable=_is_retryable(exc),
-            ))
-            await task_store.add_error(task_id, f"item_{i}: {exc}")
+            from app.agents.video_agent import _PartialVideoError
 
+            # ------------------------------------------------------------------
+            # Tier 3 checkpoint — video נכשל באמצע, נסה שוב עם state חלקי
+            # ------------------------------------------------------------------
+            if isinstance(exc, _PartialVideoError) and _is_retryable(exc):
+                logger.info(
+                    "[%s] item_%d _PartialVideoError — Tier 3 retry from extend=%d refs=%d",
+                    task_id, i, exc.completed_extends, len(exc.all_video_refs),
+                )
+                try:
+                    partial_state = _build_initial_state(
+                        task_id=task_id,
+                        item_index=i,
+                        platform=platform,
+                        content_type=content_type,
+                        language=language,
+                        quantity=quantity,
+                        description=description,
+                        pipeline_type=pipeline_type,
+                        style_reference_image=style_reference_image,
+                    )
+                    partial_state["current_video_ref"] = exc.current_video_ref
+                    partial_state["completed_extends"] = exc.completed_extends
+                    partial_state["all_video_refs"]    = exc.all_video_refs
+
+                    result = await _run_single_item(
+                        task_id=task_id,
+                        item_index=i,
+                        platform=platform,
+                        content_type=content_type,
+                        language=language,
+                        quantity=quantity,
+                        description=description,
+                        pipeline_type=pipeline_type,
+                        style_reference_image=style_reference_image,
+                        override_state=partial_state,
+                    )
+                    logger.info(
+                        "[%s] item_%d Tier 3 retry SUCCEEDED",
+                        task_id, i,
+                    )
+                    # מחשב את החיסכון — מה שכבר עשינו לא עשינו שוב
+                    checkpoint_saving = exc.completed_extends * 0.20
+                    total_checkpoint_savings += checkpoint_saving
+                    logger.info(
+                        "[%s] item_%d cost_saved_by_checkpoint=$%.2f",
+                        task_id, i, checkpoint_saving,
+                    )
+
+                except Exception as retry_exc:
+                    logger.error(
+                        "[%s] item_%d Tier 3 retry FAILED: %s",
+                        task_id, i, retry_exc, exc_info=True,
+                    )
+                    failed_items.append(FailedItem(
+                        index=i,
+                        stage=_infer_failure_stage(retry_exc),
+                        error=str(retry_exc),
+                        retryable=_is_retryable(retry_exc),
+                    ))
+                    await task_store.add_error(task_id, f"item_{i}: {retry_exc}")
+                    continue
+
+            else:
+                logger.error("[%s] item_%d FAILED: %s", task_id, i, exc, exc_info=True)
+                failed_items.append(FailedItem(
+                    index=i,
+                    stage=_infer_failure_stage(exc),
+                    error=str(exc),
+                    retryable=_is_retryable(exc),
+                ))
+                await task_store.add_error(task_id, f"item_{i}: {exc}")
+                continue
+
+        # ------------------------------------------------------------------
+        # הצלחה (ריצה רגילה או אחרי Tier 3 retry)
+        # ------------------------------------------------------------------
+        item_cost = result.get("cost_accumulated", 0.0)
+        total_cost += item_cost
+        await task_store.increment_cost(task_id, item_cost)
+
+        if result.get("style_reference_image") and not style_reference_image:
+            style_reference_image = result["style_reference_image"]
+            logger.info(
+                "[%s] Style reference set from item_%d: %s",
+                task_id, i, style_reference_image,
+            )
+
+        for img in result.get("generated_images", []):
+            all_assets.append(AssetRecord(
+                item_index=i,
+                asset_type="image",
+                s3_key=img.get("s3_key", ""),
+                file_format=img.get("format", "png"),
+                validation_passed=_item_passed_validation(result, i),
+                generation_cost_usd=item_cost,
+            ))
+        for vid in result.get("generated_videos", []):
+            all_assets.append(AssetRecord(
+                item_index=i,
+                asset_type="video",
+                s3_key=vid.get("s3_key", ""),
+                file_format="mp4",
+                validation_passed=_item_passed_validation(result, i),
+                generation_cost_usd=item_cost,
+            ))
+        if result.get("generated_texts"):
+            # content_type -> root folder
+            if content_type == "comment":
+                root = "comments"
+            elif content_type in ("post", "story"):
+                root = "posts"
+            else:
+                root = "videos"
+            all_assets.append(AssetRecord(
+                item_index=i,
+                asset_type="text",
+                s3_key=f"{root}/{task_id}/{platform}/item_{i}/content.json",
+                file_format="json",
+                validation_passed=_item_passed_validation(result, i),
+                generation_cost_usd=item_cost,
+            ))
+
+        await task_store.update(task_id, items_completed=i + 1 - len(failed_items))
+
+    # ------------------------------------------------------------------
+    # manifest + final status
+    # ------------------------------------------------------------------
     items_delivered = quantity - len(failed_items)
     final_status = (
         TaskStatus.completed if not failed_items
@@ -238,7 +315,6 @@ async def run_batch(
         "[%s] Batch complete: delivered=%d failed=%d cost=$%.4f status=%s",
         task_id, items_delivered, len(failed_items), total_cost, final_status,
     )
-
 
 def _item_passed_validation(result: dict, item_index: int) -> bool:
     for vr in result.get("validation_results", []):
