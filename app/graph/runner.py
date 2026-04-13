@@ -176,7 +176,7 @@ async def run_batch(
                     partial_state["current_video_ref"] = exc.current_video_ref
                     partial_state["completed_extends"] = exc.completed_extends
                     partial_state["all_video_refs"]    = exc.all_video_refs
-
+                    partial_state["generated_texts"]   = exc.generated_texts  # ← הוסף                   
                     result = await _run_single_item(
                         task_id=task_id,
                         item_index=i,

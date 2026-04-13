@@ -31,7 +31,14 @@ async def _content_validator_node(state: ContentEngineState) -> dict:
     return await run(state)
 
 
-def _route_after_orchestrator(state: ContentEngineState) -> Literal["content_agent"]:
+def _route_after_orchestrator(state: ContentEngineState) -> Literal["content_agent", "video_agent"]:
+    # Tier 3 checkpoint — דלג ישר ל-video_agent
+    if state.get("current_video_ref"):
+        logger.info(
+            "[%s] Graph router: video checkpoint detected — skipping to video_agent",
+            state.get("task_id", "?"),
+        )
+        return "video_agent"
     return "content_agent"
 
 def _route_after_content_agent(state) -> Literal["image_agent", "content_validator"]:
@@ -81,7 +88,11 @@ def build_graph() -> tuple[StateGraph, MemorySaver]:
     builder.add_node("content_validator", _content_validator_node)
 
     builder.set_entry_point("orchestrator")
-    builder.add_conditional_edges("orchestrator",      _route_after_orchestrator, {"content_agent": "content_agent"})
+    builder.add_conditional_edges(
+        "orchestrator",
+        _route_after_orchestrator,
+        {"content_agent": "content_agent", "video_agent": "video_agent"}
+    )
     builder.add_conditional_edges("content_agent",     _route_after_content_agent, {"image_agent": "image_agent", "content_validator": "content_validator"})
     builder.add_conditional_edges("image_agent",       _route_after_image_agent,  {"video_agent": "video_agent",  "content_validator": "content_validator"})
     builder.add_edge("video_agent", "content_validator")

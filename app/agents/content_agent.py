@@ -416,14 +416,16 @@ async def run(state: ContentEngineState) -> dict:
     )
   
     is_retry = state.get("retry_count", 0) > 0
+    is_video_checkpoint = bool(state.get("current_video_ref"))
+
     updates: dict = {
-        "generated_texts": items,
-        "cost_accumulated": state.get("cost_accumulated", 0.0) + cost,
-        "generated_images":  state.get("generated_images", []) if is_retry and content_type in ("post", "story") else [],
+        "generated_texts":   items,
+        "cost_accumulated":  state.get("cost_accumulated", 0.0) + cost,
+        "generated_images":  state.get("generated_images", []) if (is_retry and content_type in ("post", "story")) or is_video_checkpoint else [],
         "generated_videos":  [],
-        "current_video_ref": None,
-        "completed_extends": 0,
-        "all_video_refs":  [],
+        "current_video_ref": state.get("current_video_ref") if is_video_checkpoint else None,
+        "completed_extends": state.get("completed_extends", 0) if is_video_checkpoint else 0,
+        "all_video_refs":    state.get("all_video_refs", []) if is_video_checkpoint else [],
     }
 
     # visual_style_descriptor: first item sets the anchor; subsequent items keep

@@ -134,11 +134,12 @@ async def run(state: ContentEngineState) -> dict:
                 task_id, extend_idx + 1, exc, completed_extends, current_video_ref,
             )
             raise _PartialVideoError(
-                str(exc),
-                current_video_ref=current_video_ref,
-                completed_extends=completed_extends,
-                all_video_refs=all_video_refs,
-            ) from exc
+            str(exc),
+            current_video_ref=current_video_ref,
+            completed_extends=completed_extends,
+            all_video_refs=all_video_refs,
+            generated_texts=state.get("generated_texts", []),  # ← הוסף
+        ) from exc
 
     # ------------------------------------------------------------------
     # Step 3: Download final video from GCS
@@ -224,8 +225,11 @@ async def run(state: ContentEngineState) -> dict:
 
 
 class _PartialVideoError(Exception):
-    def __init__(self, message: str, current_video_ref: str, completed_extends: int, all_video_refs: list[str] | None = None):
+    def __init__(self, message: str, current_video_ref: str, completed_extends: int, 
+                 all_video_refs: list[str] | None = None,
+                 generated_texts: list[dict] | None = None):  # ← הוסף
         super().__init__(message)
         self.current_video_ref = current_video_ref
         self.completed_extends = completed_extends
         self.all_video_refs    = all_video_refs or []
+        self.generated_texts   = generated_texts or []  # ← הוסף
