@@ -193,8 +193,8 @@ async def extend_video(video_uri: str, prompt: str, extend_index: int) -> str:
         return await mock_extend_video(video_uri, prompt, extend_index)
 
     breaker = get_breaker("gemini")
-    if extend_index == 1 and not os.path.exists("C:/tmp/checkpoint_test_done.flag"):
-        open("C:/tmp/checkpoint_test_done.flag", "w").close()  # מסמן שכבר נכשל
+    if extend_index == 1 and not os.path.exists("C:/tmp/checkpoint_test_done1.flag"):
+        open("C:/tmp/checkpoint_test_done1.flag", "w").close()  # מסמן שכבר נכשל
         raise RuntimeError("SIMULATED FAILURE for checkpoint test")
     async def _call() -> str:
         import google.genai.types as types
