@@ -44,18 +44,16 @@ def _build_image_prompt(state: ContentEngineState, is_thumbnail: bool = False) -
         f"Ultra high quality, 8K, professional studio lighting, appetizing presentation."
     )
 
-
 async def run(state: ContentEngineState) -> dict:
-    task_id = state["task_id"]
-    item_index = state["item_index"]
-    platform = state["platform"]
+    task_id      = state["task_id"]
+    item_index   = state["item_index"]
+    platform     = state["platform"]
     content_type = state["content_type"]
     is_thumbnail = content_type == "reels"
+    desc         = state["description"]
 
     aspect_ratio = ASPECT_RATIOS.get((platform, content_type), DEFAULT_ASPECT)
     scene_prompt = _build_image_prompt(state, is_thumbnail=is_thumbnail)
-
-    # Visual style descriptor — constant across all items, set by Content Agent
     visual_style_descriptor: str = state.get("visual_style_descriptor", "")
 
     logger.info(
@@ -64,9 +62,7 @@ async def run(state: ContentEngineState) -> dict:
         bool(visual_style_descriptor),
     )
 
-    # ------------------------------------------------------------------
-    # Load style reference bytes if a previous item already generated an image
-    # ------------------------------------------------------------------
+    # Load style reference bytes
     style_reference_bytes: bytes | None = None
     style_ref_key = state.get("style_reference_image")
 
@@ -91,11 +87,7 @@ async def run(state: ContentEngineState) -> dict:
                 task_id, exc,
             )
 
-    # ------------------------------------------------------------------
-    # Generate image
-    # Both style_reference_bytes AND visual_style_descriptor are passed so
-    # gemini_client places them correctly in the prompt for each code path.
-    # ------------------------------------------------------------------
+    # Generate main image (thumbnail or post)
     image_bytes = await generate_image(
         prompt=scene_prompt,
         aspect_ratio=aspect_ratio,
@@ -103,30 +95,29 @@ async def run(state: ContentEngineState) -> dict:
         visual_style_descriptor=visual_style_descriptor,
     )
 
-    # Upload image to S3
     filename = "thumbnail.png" if is_thumbnail else "image.png"
     s3_key = asset_key(task_id, platform, content_type, item_index, filename)
     await upload_bytes(s3_key, image_bytes, content_type="image/png")
 
-    # Upload caption alongside image
+    # Upload caption
     texts = state.get("generated_texts", [])
     if texts:
         caption_data = texts[0] if isinstance(texts[0], dict) else {}
         caption_text = caption_data.get("text", "")
-        hashtags = caption_data.get("hashtags", [])
+        hashtags     = caption_data.get("hashtags", [])
         full_caption = caption_text + "\n\n" + " ".join(hashtags) if hashtags else caption_text
         if full_caption.strip():
             caption_key = asset_key(task_id, platform, content_type, item_index, "caption.txt")
             await upload_text(caption_key, full_caption)
 
     image_record = {
-        "s3_key": s3_key,
-        "prompt": scene_prompt,
+        "s3_key":                 s3_key,
+        "prompt":                 scene_prompt,
         "visual_style_descriptor": visual_style_descriptor,
-        "dimensions": "native",
-        "aspect_ratio": aspect_ratio,
-        "is_thumbnail": is_thumbnail,
-        "format": "png",
+        "dimensions":             "native",
+        "aspect_ratio":           aspect_ratio,
+        "is_thumbnail":           is_thumbnail,
+        "format":                 "png",
     }
 
     updates: dict = {
@@ -134,16 +125,47 @@ async def run(state: ContentEngineState) -> dict:
         "cost_accumulated": state.get("cost_accumulated", 0.0) + 0.04,
     }
 
-    # First image in the batch sets the style reference anchor for all subsequent items
     if not state.get("style_reference_image"):
         updates["style_reference_image"] = s3_key
-        logger.info(
-            "[%s] ImageAgent: style reference anchor set -> %s",
-            task_id, s3_key,
-        )
+        logger.info("[%s] ImageAgent: style reference anchor set -> %s", task_id, s3_key)
+
+    # ── Food Reference Image (ללא אנשים) — לשימוש כ-style anchor בסצנה 4 ──
+    if is_thumbnail and not state.get("food_reference_image"):
+        try:
+            food_prompt = (
+                f"Photorealistic food photography: {desc}. "
+                f"The finished dish beautifully plated on a white ceramic bowl. "
+                f"NO people, NO hands, NO humans — food only. "
+                f"Garnished with fresh herbs. "
+                f"Style: {visual_style_descriptor}. "
+                f"9:16 vertical format. Cinematic food photography. "
+                f"Ultra high quality, professional studio lighting."
+            )
+            food_image_bytes = await generate_image(
+                prompt=food_prompt,
+                aspect_ratio="9:16",
+                style_reference_bytes=None,          # ← ללא reference כדי למנוע חסימה
+                visual_style_descriptor=visual_style_descriptor,
+            )
+            food_key = asset_key(task_id, platform, content_type, item_index, "food_reference.png")
+            await upload_bytes(food_key, food_image_bytes, content_type="image/png")
+            updates["food_reference_image"] = food_key
+            logger.info("[%s] ImageAgent: food reference image -> %s", task_id, food_key)
+        except Exception as exc:
+            logger.warning(
+                "[%s] ImageAgent: food reference image failed (%s) — continuing without",
+                task_id, exc,
+            )
 
     logger.info(
         "[%s] ImageAgent: item_%d uploaded -> %s (used_reference=%s)",
         task_id, item_index, s3_key, style_reference_bytes is not None,
     )
     return updates
+
+
+
+
+
+
+

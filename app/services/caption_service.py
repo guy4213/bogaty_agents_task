@@ -229,6 +229,7 @@ def _sync_merge_clips(
 ) -> bytes:
     import static_ffmpeg
     import shutil
+    import time
     from google.cloud import storage as gcs
     static_ffmpeg.add_paths()
 
@@ -241,36 +242,69 @@ def _sync_merge_clips(
 
     client = gcs.Client(project=project_id)
 
-    # שלב 1 — הורד כל קליפ
+    # ------------------------------------------------------------------
+    # שלב 1 — הורד כל קליפ עם retry
+    # ------------------------------------------------------------------
     clip_paths = []
     for i, uri in enumerate(gcs_uris):
         bucket_name = uri.split("/")[2]
         blob_name   = "/".join(uri.split("/")[3:])
         clip_path   = tmp_dir / f"clip_{i}.mp4"
         logger.info("Downloading clip %d/%d: %s", i + 1, len(gcs_uris), uri)
-        client.bucket(bucket_name).blob(blob_name).download_to_filename(str(clip_path))
+
+        # retry — I2V עלול להיות לא מוכן מיידית ב-GCS
+        for attempt in range(5):
+            client.bucket(bucket_name).blob(blob_name).download_to_filename(str(clip_path))
+            size = clip_path.stat().st_size
+            if size > 10_000:  # קובץ תקין
+                break
+            logger.warning(
+                "Clip %d too small (%d bytes) — waiting 5s, retry %d/5",
+                i + 1, size, attempt + 1,
+            )
+            time.sleep(5)
+        else:
+            raise RuntimeError(f"Clip {i+1} download failed after 5 retries — size={clip_path.stat().st_size}")
+
         clip_paths.append(clip_path)
 
-    # שלב 2 — חתוך כל קליפ לחלק החדש שלו עם reencode
+    # ------------------------------------------------------------------
+    # שלב 2 — חתוך כל קליפ לחלק החדש שלו
+    # ------------------------------------------------------------------
     trimmed_paths = []
     accumulated   = 0.0
 
     for i, clip_path in enumerate(clip_paths):
+        # הקליפ האחרון (I2V) עשוי להיות 8s במקום extend_duration
+        # נחתוך לפי מה שיש בפועל — לא לפי duration מוגדר
+        is_last = (i == len(clip_paths) - 1)
         duration = initial_duration if i == 0 else extend_duration
         start    = accumulated
         trimmed  = tmp_dir / f"trimmed_{i}.mp4"
 
-        cmd = [
-            ffmpeg_exe, "-y",
-            "-ss", str(start),
-            "-i", clip_path.name,
-            "-t", str(duration),
-            "-c:v", "libx264",
-            "-c:a", "aac",
-            "-crf", "18",
-            "-preset", "fast",
-            trimmed.name,
-        ]
+        if is_last:
+            # קליפ אחרון (I2V) — חתוך מהתחלה, כל מה שיש
+            cmd = [
+                ffmpeg_exe, "-y",
+                "-i", clip_path.name,
+                "-c:v", "libx264",
+                "-c:a", "aac",
+                "-crf", "18",
+                "-preset", "fast",
+                trimmed.name,
+            ]
+        else:
+            cmd = [
+                ffmpeg_exe, "-y",
+                "-ss", str(start),
+                "-i", clip_path.name,
+                "-t", str(duration),
+                "-c:v", "libx264",
+                "-c:a", "aac",
+                "-crf", "18",
+                "-preset", "fast",
+                trimmed.name,
+            ]
 
         proc = subprocess.run(
             cmd, cwd=str(tmp_dir),
@@ -286,12 +320,13 @@ def _sync_merge_clips(
         accumulated += duration
         logger.info("Trimmed clip %d: %.1fs → %.1fs", i, start, start + duration)
 
-    # שלב 3 — חבר עם audio crossfade
+    # ------------------------------------------------------------------
+    # שלב 3 — חבר: video hard cut + audio crossfade
+    # ------------------------------------------------------------------
     n = len(trimmed_paths)
     output_path = tmp_dir / "merged.mp4"
 
     if n == 1:
-        # קליפ אחד — אין צורך ב-crossfade
         proc = subprocess.run(
             [ffmpeg_exe, "-y", "-i", trimmed_paths[0].name, "-c", "copy", "merged.mp4"],
             cwd=str(tmp_dir),
@@ -299,35 +334,44 @@ def _sync_merge_clips(
             encoding="utf-8", errors="replace",
         )
     else:
-        # בנה inputs
         inputs = []
         for p in trimmed_paths:
             inputs += ["-i", p.name]
 
-        # בנה filter_complex עם acrossfade בין כל קליפים עוקבים
-        # וידאו: concat
-        # אודיו: acrossfade עם 0.3s
         filter_parts = []
 
-        # video concat
-        video_inputs = "".join(f"[{i}:v]" for i in range(n))
+        # וידאו: scale לרזולוציה אחידה + concat נקי
+        for i in range(n):
+            filter_parts.append(
+                f"[{i}:v]scale=720:1280:force_original_aspect_ratio=decrease,"
+                f"pad=720:1280:(ow-iw)/2:(oh-ih)/2,setsar=1[v{i}]"
+            )
+        video_inputs = "".join(f"[v{i}]" for i in range(n))
         filter_parts.append(f"{video_inputs}concat=n={n}:v=1:a=0[vout]")
 
-        # audio crossfade בשרשרת
+        # אודיו: acrossfade בשרשרת
+       # אודיו: acrossfade בין clips 0-2, clip 4 (I2V) מקבל המשך אודיו מclip 3
         if n == 2:
             filter_parts.append(
-                f"[0:a][1:a]acrossfade=d=0.3:c1=tri:c2=tri[aout]"
+                f"[0:a][1:a]acrossfade=d=0.4:c1=tri:c2=tri[aout]"
+            )
+        elif n == 3:
+            filter_parts.append(
+                f"[0:a][1:a]acrossfade=d=0.4:c1=tri:c2=tri[tmp1]"
+            )
+            filter_parts.append(
+                f"[tmp1][2:a]acrossfade=d=0.4:c1=tri:c2=tri[aout]"
             )
         else:
-            # שרשרת: 0+1 → tmp1, tmp1+2 → tmp2, ...
             filter_parts.append(
-                f"[0:a][1:a]acrossfade=d=0.3:c1=tri:c2=tri[tmp1]"
+                f"[0:a][1:a]acrossfade=d=0.4:c1=tri:c2=tri[tmp1]"
             )
-            for i in range(2, n):
-                out = "[aout]" if i == n - 1 else f"[tmp{i}]"
-                filter_parts.append(
-                    f"[tmp{i-1}][{i}:a]acrossfade=d=0.3:c1=tri:c2=tri{out}"
-                )
+            filter_parts.append(
+                f"[tmp1][2:a]acrossfade=d=0.4:c1=tri:c2=tri[tmp2]"
+            )
+            filter_parts.append(
+                f"[tmp2]apad=pad_dur=10[aout]"
+            )
 
         filter_complex = ";".join(filter_parts)
 
@@ -344,7 +388,10 @@ def _sync_merge_clips(
             "merged.mp4",
         ]
 
-        logger.info("FFmpeg: merging %d clips with audio crossfade", n)
+        logger.info(
+            "FFmpeg: merging %d clips — video=hard_cut audio=crossfade(0.4s)",
+            n,
+        )
         proc = subprocess.run(
             cmd, cwd=str(tmp_dir),
             capture_output=True, text=True,
@@ -356,13 +403,59 @@ def _sync_merge_clips(
         raise RuntimeError(f"FFmpeg merge failed:\n{proc.stderr[-500:]}")
 
     result = output_path.read_bytes()
-    logger.info("Merged %d clips with crossfade → %d bytes", n, len(result))
+    logger.info(
+        "Merged %d clips — video hard_cut + audio crossfade → %d bytes",
+        n, len(result),
+    )
 
     # ניקוי
     for f in clip_paths + trimmed_paths + [output_path]:
-        try:
-            f.unlink()
-        except Exception:
-            pass
+        try: f.unlink()
+        except Exception: pass
 
     return result
+
+def extract_last_frame(video_bytes: bytes) -> bytes:
+    """חותך את הframe האחרון מהוידאו ומחזיר PNG bytes."""
+    import static_ffmpeg
+    import shutil
+    static_ffmpeg.add_paths()
+
+    ffmpeg_exe = shutil.which("ffmpeg")
+    if not ffmpeg_exe:
+        raise RuntimeError("FFmpeg not found")
+
+    tmp_dir = pathlib.Path("C:/tmp/ffmpeg_work")
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    input_path = tmp_dir / "frame_input.mp4"
+    frame_path = tmp_dir / "last_frame.png"
+
+    input_path.write_bytes(video_bytes)
+
+    cmd = [
+        ffmpeg_exe, "-y",
+        "-sseof", "-0.1",
+        "-i", "frame_input.mp4",
+        "-vframes", "1",
+        "-q:v", "2",
+        "last_frame.png",
+    ]
+
+    proc = subprocess.run(
+        cmd, cwd=str(tmp_dir),
+        capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
+    )
+
+    if proc.returncode != 0:
+        raise RuntimeError(f"FFmpeg frame extract failed: {proc.stderr[-300:]}")
+
+    frame_bytes = frame_path.read_bytes()
+    logger.info("Extracted last frame: %d bytes", len(frame_bytes))
+
+    for f in [input_path, frame_path]:
+        try: f.unlink()
+        except Exception: pass
+
+    return frame_bytes

@@ -207,93 +207,184 @@ Schema:
   ]
 }}"""
 
-
 def _build_reels_script_prompt(state: ContentEngineState) -> str:
     lang = state["language"]
     desc = state["description"]
+
     lang_instruction = (
-        "Write the script and ALL caption text in Hebrew." if lang == "he"
-        else "Write the script and all captions in English."
+        "Write ALL text fields (caption_text, full_caption, hashtags) in Hebrew."
+        if lang == "he"
+        else "Write ALL text fields in English."
     )
     caption_note = (
-        "Caption text will be rendered onto video frames. Keep each caption concise (max 8 Hebrew words)."
+        "Each caption_text must be max 8 Hebrew words — short and punchy."
         if lang == "he"
-        else "Caption text will be embedded into video frames. Keep each caption concise (max 8 words)."
+        else "Each caption_text must be max 8 words — short and punchy."
     )
 
-    return f"""Generate a 30-second video Reel script about: "{desc}"
+    return f"""You are a strict, precise AI video architecture scriptwriter. Generate a 29-second vertical Reel script.
 
+TOPIC: "{desc}"
 {lang_instruction}
 
-Structure: exactly 4 scenes (8s + 7s + 7s + 7s = 29 seconds total)
+════════════════════════════════════════
+STEP 1 — IDENTIFY THE CANONICAL SUBJECT
+════════════════════════════════════════
+Define the single specific subject of this video.
 
-{caption_note}
+Rules:
+- Be hyper-specific. Name the exact object, food, person, or item.
+- This exact string MUST appear at the start of EVERY scene's visual_description.
+- ✅ GOOD: "thin spaghetti pasta with cherry tomatoes and garlic"
+- ❌ BAD: "pasta" / "food" / "the dish"
 
-IMPORTANT: Veo video model cannot render RTL text correctly.
-For each scene you MUST provide TWO caption fields:
-- "caption_text":    the caption in {("Hebrew" if lang == "he" else "English")} (for script.txt)
-- "caption_text_en": the English translation (for Veo rendering — always English)
+════════════════════════════════════════
+STEP 2 — DEFINE THE VISUAL STYLE
+════════════════════════════════════════
+Define a "visual_style_descriptor" — one sentence (max 25 words) locking:
+  lighting temperature, color palette, camera style, depth of field, and mood.
 
-Also produce a "visual_style_descriptor" — one sentence (max 25 words) locking the
-visual style for ALL scenes and the thumbnail.
+Example: "Warm candlelit tones, rich ochre palette, shallow DOF close-ups, slow cinematic movement, intimate mood."
 
-CRITICAL — scenes must follow strict chronological story progression.
-The entire video tells ONE continuous story — same location, same subject, same visual language:
-- Scene 1 (8s): Opening hook — establish the subject, raw/initial state
-- Scene 2 (7s): Action/process — the transformation or key action happening
-- Scene 3 (7s): Progress/detail — close-up of the key moment or result developing
-- Scene 4 (7s): Final reveal — completed result, beauty shot, call to action
+Every scene's visual_description MUST weave these exact photometric properties naturally.
+Same lighting, same palette, same texture and mood throughout all 4 scenes.
 
-STRICTLY FORBIDDEN:
-- Do NOT introduce new elements not present from the start
-- Do NOT change location or setting between scenes
-- Each visual_description must reference the SAME specific subject throughout
+════════════════════════════════════════
+STEP 3 — THE NARRATIVE ARC (4 SCENES: 8s+7s+7s+7s)
+════════════════════════════════════════
+Structure is NON-CHRONOLOGICAL. Scene 1 is the HOOK. Scenes 2-4 run chronologically.
+This applies to ANY topic (Food, Sports, Real Estate, Tech, etc.).
 
-AUDIO — this is critical for viewer engagement:
-For each scene's "audio_mood", be VERY specific and match it to the video content:
-- Describe the exact music genre (e.g. "upbeat lo-fi hip hop", "warm acoustic guitar", "cinematic orchestral build")
-- Describe the energy level (e.g. "energetic and rhythmic", "calm and warm", "building excitement")
-- Include ambient sounds relevant to the scene (e.g. "sizzling sounds", "crowd ambience", "nature sounds")
-- Keep musical theme CONSISTENT across all 4 scenes — same genre, evolving energy
-- Match the platform: TikTok = energetic and modern, Instagram = warm and aspirational
+- Scene 1 (8s): THE HOOK — show the FINISHED result with key ingredients/components visible.
+  The viewer must immediately think "I want that."
+  (Food: finished plated dish + raw ingredients around it.
+   Sports: peak moment/winning shot. Real Estate: glowing exterior. Tech: final glowing setup).
 
-Example for a cooking video:
-"upbeat Mediterranean acoustic guitar, rhythmic and warm, with sizzling kitchen ambience sounds"
+- Scene 2 (7s): THE INGREDIENTS — raw components beautifully laid out, then first prep motion begins.
+  Show ALL components clearly before any transformation begins.
+  (Food: raw ingredients spread out, first prep motion.
+   Sports: equipment laid out, athlete stretching.
+   Real Estate: opening front door, first look inside.
+   Tech: parts unboxed and laid out, first assembly step).
 
-Return ONLY a valid JSON object. No preamble, no markdown fences.
-Schema:
+- Scene 3 (7s): THE PROCESS — show the FULL cooking process, not just the final toss.
+  The viewer needs to see HOW it's made, not just the end result.
+  CRITICAL TIMING RULE:
+  - Seconds 0-2: adding ingredients to the pan — pouring sauce, placing pasta in.
+  - Seconds 2-4: active cooking — sizzling, stirring, combining everything together.
+  - Seconds 4-7: action SLOWS DOWN. Dish settles in pan, nearly static.
+    End on a still frame — completed dish in pan, no motion.
+  This full arc (add → cook → settle) is non-negotiable.
+  (Food: pour sauce into pan → add pasta → toss → settle still in pan.
+   Sports: approach bar → execute lift → hold position still.
+   Real Estate: enter room → pan across features → camera settles on hero spot.
+   Tech: connect final cable → power on → device glowing still).
+
+- Scene 4 (7s): THE PAYOFF — the dish is now PLATED on a beautiful plate/bowl.
+  NOT in the pan — it has been transferred to a plate for the final presentation.
+  Camera slowly pushes in on the plated dish.
+  (Food: finished dish plated on ceramic bowl/plate, garnished, beauty shot.
+   Sports: athlete holding trophy/celebrating after the effort.
+   Real Estate: final hero room fully styled and lit.
+   Tech: completed device powered on, glowing screen).
+
+For EACH scene provide:
+
+1. visual_description:
+   - MUST start with the canonical_subject verbatim
+   - Describe EXACTLY what is physically happening in the frame
+   - Weave in lighting, palette and mood from visual_style_descriptor naturally
+   - Describe camera as a FLUID continuous motion
+     ✅ GOOD: "camera slowly pushes in from wide to close-up"
+     ❌ BAD: "close-up shot" with no transition described
+   - 🚫 ZERO HALLUCINATION RULE: describe ONLY physical visible items.
+     Do NOT describe sounds, music, smells, or abstract concepts.
+     Do NOT mention musical instruments unless they are the explicit topic of the video.
+
+2. entry_state:
+   - One precise sentence: the EXACT visual state at frame zero of this scene
+   - Scene 1: "opening shot — finished result already visible"
+   - Scene 2: "cut to raw ingredients laid out — chronological sequence begins"
+   - Scene 3: describe what is already done when we cut in
+     Example: "ingredients prepped and ready, pan already hot, oil shimmering"
+   - Scene 4: MUST list every action from scene 3 as already completed
+     Example: "pasta fully coated in sauce, settled and still in pan — no motion"
+     ⚠️ If scene 3 showed pouring/adding/mixing — scene 4 entry_state MUST confirm it is done AND still.
+
+3. caption_text / caption_text_en:
+   - caption_text: in {("Hebrew" if lang == "he" else "English")} — for the script file
+   - caption_text_en: ALWAYS in English — for Veo text rendering
+   - {caption_note}
+
+4. audio_mood:
+   - Specify music energy + tempo + ambient sounds
+   - Use abstract musical descriptors ONLY — no instrument names
+   - 🚫 FORBIDDEN: "guitar", "piano", "drums", or any physical instrument name
+   - ✅ GOOD: "upbeat warm melodic rhythm, energetic and flowing, with sizzling ambient sounds"
+   - Genre MUST stay consistent across all 4 scenes (energy can evolve)
+   - Scene 3 audio MUST include a natural energy decrease toward the end
+     to match the visual deceleration
+
+════════════════════════════════════════
+STRICT ANTI-HALLUCINATION RULES
+════════════════════════════════════════
+1. NO NEW OBJECTS: Do NOT introduce random items, people, or background elements
+   not present in Scene 1.
+2. NO CROSS-MODALITY: visual_description must be 100% silent.
+   Never describe sound, music, or smell inside a visual field.
+3. FORWARD MOTION ONLY: within scenes 2-4, time moves forward only.
+   No rewinding, no undoing, no repeating previous actions.
+4. NO REPEAT ACTIONS: if an action occurred in scene N, it CANNOT occur again in scene N+1.
+5. SCENE 3 MUST DECELERATE: the last 3 seconds of scene 3 must be calm and nearly static.
+6. SUBJECT LOCK: Do NOT change the type or variety of the canonical subject between scenes.
+7. ADAPT TO TOPIC: use terminology appropriate to the niche.
+8. SCENE 3 FULL ARC: Scene 3 MUST show the complete process:
+   adding ingredients → active cooking → settling still.
+   Do NOT skip directly to tossing — show the full preparation within the scene.
+════════════════════════════════════════
+OUTPUT FORMAT — CRITICAL
+════════════════════════════════════════
+Your response MUST be a single raw JSON object.
+ABSOLUTELY FORBIDDEN: markdown fences, backticks, any text before {{ or after }}.
+The first character MUST be {{ and the last MUST be }}.
+
 {{
   "index": 0,
+  "canonical_subject": "...",
   "visual_style_descriptor": "...",
   "scenes": [
     {{
       "scene": 1,
       "duration_sec": 8,
-      "visual_description": "...",
+      "entry_state": "opening shot — finished result already visible",
+      "visual_description": "[canonical_subject] — [finished result + components visible + fluid camera + lighting/mood]",
       "caption_text": "...",
       "caption_text_en": "...",
-      "audio_mood": "upbeat [genre], [energy], with [ambient sounds]"
+      "audio_mood": "..."
     }},
     {{
       "scene": 2,
       "duration_sec": 7,
-      "visual_description": "...",
+      "entry_state": "cut to raw ingredients laid out — chronological sequence begins",
+      "visual_description": "[canonical_subject] — [raw components laid out + first prep motion + fluid camera + lighting/mood]",
       "caption_text": "...",
       "caption_text_en": "...",
       "audio_mood": "..."
     }},
-    {{
-      "scene": 3,
-      "duration_sec": 7,
-      "visual_description": "...",
-      "caption_text": "...",
-      "caption_text_en": "...",
-      "audio_mood": "..."
-    }},
+{{
+  "scene": 3,
+  "duration_sec": 7,
+  "entry_state": "ingredients prepped, pan hot — ready to combine",
+  "visual_description": "[canonical_subject] — [sauce poured in + pasta added + tossed together + settles still, fluid camera + lighting/mood]",
+  "caption_text": "...",
+  "caption_text_en": "...",
+  "audio_mood": "... peak energy seconds 0-4, decreasing toward end"
+}}
     {{
       "scene": 4,
       "duration_sec": 7,
-      "visual_description": "...",
+      "entry_state": "dish has been plated on a beautiful ceramic plate, garnished and ready",
+      "visual_description": "[canonical_subject] — plated on ceramic dish, garnished, camera slowly pushing in on the plated dish.",
       "caption_text": "...",
       "caption_text_en": "...",
       "audio_mood": "..."
@@ -302,6 +393,7 @@ Schema:
   "hashtags": ["#tag1", "#tag2"],
   "full_caption": "..."
 }}"""
+
 
 
 # ---------------------------------------------------------------------------
@@ -422,7 +514,7 @@ async def run(state: ContentEngineState) -> dict:
         "generated_texts":   items,
         "cost_accumulated":  state.get("cost_accumulated", 0.0) + cost,
         "generated_images":  state.get("generated_images", []) if (is_retry and content_type in ("post", "story")) or is_video_checkpoint else [],
-        "generated_videos":  [],
+        "generated_videos": state.get("generated_videos", []) if is_video_checkpoint else [],
         "current_video_ref": state.get("current_video_ref") if is_video_checkpoint else None,
         "completed_extends": state.get("completed_extends", 0) if is_video_checkpoint else 0,
         "all_video_refs":    state.get("all_video_refs", []) if is_video_checkpoint else [],

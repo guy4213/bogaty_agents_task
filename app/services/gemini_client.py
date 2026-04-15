@@ -14,10 +14,24 @@ _VEO_MAX_POLL_SEC = 600
 # In-memory store for Vertex AI video bytes (Vertex returns bytes, not URIs)
 _vertex_video_store: dict[str, bytes] = {}
 
-
+_NEUTRAL_VARIATIONS = [
+    "",
+    " Maintain continuous background audio and atmosphere from previous clip.",
+    " Seamless continuation. Same audio atmosphere and visual energy.",
+    " Same visual flow, same audio continuity, same atmosphere.",
+]
 def _store_video_bytes(data: bytes, key: str) -> None:
     _vertex_video_store[key] = data
 
+def _is_gemini_unavailable(exc: Exception) -> bool:
+    """503 UNAVAILABLE + code 8 overload — שניהם transient"""
+    msg = str(exc)
+    return (
+        "503" in msg or
+        "UNAVAILABLE" in msg or
+        "'code': 8" in msg or
+        "high load" in msg
+    )
 
 def _get_stored_video_bytes(vertex_uri: str) -> bytes:
     key = vertex_uri.replace("vertex://", "")
@@ -25,7 +39,17 @@ def _get_stored_video_bytes(vertex_uri: str) -> bytes:
         raise RuntimeError(f"Video bytes not found for key: {key}")
     return _vertex_video_store[key]
 
-
+def _is_veo_overload(exc: Exception) -> bool:
+    msg = str(exc)
+    return (
+        "'code': 8" in msg or
+        "'code': 13" in msg or       # ← Internal error — retryable
+        "high load" in msg or
+        "Internal error" in msg or   # ← 
+        "Resource exhausted" in msg or
+        "503" in msg or
+        "UNAVAILABLE" in msg
+    )
 def _get_client():
     import google.genai as genai
     return genai.Client(api_key=get_settings().google_ai_api_key)
@@ -63,28 +87,43 @@ async def _upload_to_gcs(video_bytes: bytes, filename: str) -> str:
 # ---------------------------------------------------------------------------
 # Images
 # ---------------------------------------------------------------------------
-
 async def generate_image(
     prompt: str,
     aspect_ratio: str = "1:1",
     style_reference_bytes: bytes | None = None,
     visual_style_descriptor: str = "",
 ) -> bytes:
-    if get_settings().dry_run:
+    cfg = get_settings()
+    if cfg.dry_run:
         from app.mocks.mock_clients import mock_generate_image
         return await mock_generate_image(prompt, aspect_ratio, style_reference_bytes, visual_style_descriptor)
 
     breaker = get_breaker("gemini")
+    delays = [10, 20, 40]  # קצר יותר מvideo — image generation מהיר יותר
 
-    async def _call() -> bytes:
-        if style_reference_bytes:
-            return await _generate_with_reference(prompt, aspect_ratio, style_reference_bytes, visual_style_descriptor)
-        return await _generate_first(prompt, aspect_ratio, visual_style_descriptor)
+    for attempt in range(4):
+        async def _call() -> bytes:
+            if style_reference_bytes:
+                return await _generate_with_reference(
+                    prompt, aspect_ratio, style_reference_bytes, visual_style_descriptor
+                )
+            return await _generate_first(prompt, aspect_ratio, visual_style_descriptor)
 
-    return await breaker.call(_call)
+        try:
+            return await breaker.call(_call)
 
+        except Exception as exc:
+            if _is_gemini_unavailable(exc) and attempt < len(delays):
+                wait = delays[attempt]
+                logger.warning(
+                    "ImageAgent: 503/overload (attempt %d/4) — waiting %ds then retry.",
+                    attempt + 1, wait,
+                )
+                await asyncio.sleep(wait)
+                continue
+            raise  # שגיאה אחרת — throw מיידי
 
-
+    raise RuntimeError("generate_image failed after 4 attempts (all 503/overload)")
 async def _generate_first(prompt: str, aspect_ratio: str, visual_style_descriptor: str) -> bytes:
     import google.genai.types as types
     client = _get_client()
@@ -184,7 +223,6 @@ async def generate_video_initial(prompt: str) -> str:
 
     return await breaker.call(_call)
 
-import os
 
 async def extend_video(video_uri: str, prompt: str, extend_index: int) -> str:
     cfg = get_settings()
@@ -193,33 +231,51 @@ async def extend_video(video_uri: str, prompt: str, extend_index: int) -> str:
         return await mock_extend_video(video_uri, prompt, extend_index)
 
     breaker = get_breaker("gemini")
-    if extend_index == 1 and not os.path.exists("C:/tmp/checkpoint_test_done1.flag"):
-        open("C:/tmp/checkpoint_test_done1.flag", "w").close()  # מסמן שכבר נכשל
-        raise RuntimeError("SIMULATED FAILURE for checkpoint test")
-    async def _call() -> str:
-        import google.genai.types as types
-        import uuid
-        client = _get_vertex_client()
+    delays = [15, 30, 60]
+    last_exc: Exception | None = None
 
-        gcs_prefix = f"gs://{cfg.gcs_bucket_name}/veo-temp/{uuid.uuid4().hex}"
+    for attempt, variation in enumerate(_NEUTRAL_VARIATIONS):
+        final_prompt = prompt + variation
 
-        operation = await client.aio.models.generate_videos(
-            model=cfg.veo_model,
-            prompt=prompt,
-            video=types.Video(uri=video_uri,mime_type='video/mp4'),
-            config=types.GenerateVideosConfig(
-                duration_seconds=cfg.veo_extend_duration_sec,
-                output_gcs_uri=gcs_prefix,
-            ),
-        )
-        operation = await _poll(client, operation)
+        async def _call(p=final_prompt) -> str:
+            import google.genai.types as types
+            import uuid
+            client = _get_vertex_client()
+            gcs_prefix = f"gs://{cfg.gcs_bucket_name}/veo-temp/{uuid.uuid4().hex}"
 
-        uri = operation.result.generated_videos[0].video.uri
-        logger.info("VideoAgent: extend %d -> GCS: %s", extend_index + 1, uri)
-        return uri
+            operation = await client.aio.models.generate_videos(
+                model=cfg.veo_model,
+                prompt=p,
+                video=types.Video(uri=video_uri, mime_type="video/mp4"),
+                config=types.GenerateVideosConfig(
+                    duration_seconds=cfg.veo_extend_duration_sec,
+                    output_gcs_uri=gcs_prefix,
+                ),
+            )
+            operation = await _poll(client, operation)
+            uri = operation.result.generated_videos[0].video.uri
+            logger.info("VideoAgent: extend %d -> GCS: %s", extend_index + 1, uri)
+            return uri
 
-    return await breaker.call(_call)
+        try:
+            result = await breaker.call(_call)
+            return result  
 
+        except Exception as exc:
+            last_exc = exc
+            if _is_veo_overload(exc) and attempt < len(delays):
+                wait = delays[attempt]
+                logger.warning(
+                    "VideoAgent: extend %d overload (attempt %d/4) — waiting %ds. variation='%s'",
+                    extend_index + 1, attempt + 1, wait, variation,
+                )
+                await asyncio.sleep(wait)
+                continue
+            raise  # שגיאה שאינה overload — throw מיידי
+
+    raise last_exc or RuntimeError(
+        f"extend_video failed after 4 attempts — extend_index={extend_index}"
+    )
 
 async def download_video(video_uri: str) -> bytes:
     cfg = get_settings()
@@ -263,6 +319,7 @@ async def _poll(client, operation):
     return operation
 
 
+
 def _extract_uri(operation) -> str:
     """
     Vertex AI מחזיר video_bytes ישירות, לא URI.
@@ -290,3 +347,70 @@ def _extract_video_bytes(operation) -> bytes:
         raise RuntimeError("No video bytes in operation result")
     except (IndexError, AttributeError) as exc:
         raise RuntimeError(f"Could not extract video bytes: {exc}") from exc
+    
+async def generate_video_from_frame(
+    frame_bytes: bytes,
+    prompt: str,
+    extend_index: int,
+) -> str:
+    cfg = get_settings()
+
+    if cfg.dry_run:
+        from app.mocks.mock_clients import mock_extend_video
+        return await mock_extend_video("dry_run_frame", prompt, extend_index)
+
+    breaker = get_breaker("gemini")
+    delays  = [15, 30, 60]
+    last_exc: Exception | None = None
+
+    for attempt, variation in enumerate(_NEUTRAL_VARIATIONS):
+        final_prompt = prompt + variation
+
+        async def _call(p=final_prompt) -> str:
+            import google.genai.types as types
+            import uuid
+            client = _get_vertex_client()
+
+            gcs_prefix = f"gs://{cfg.gcs_bucket_name}/veo-temp/{uuid.uuid4().hex}"
+
+            image = types.Image(
+                image_bytes=frame_bytes,
+                mime_type="image/png",
+            )
+
+            operation = await client.aio.models.generate_videos(
+                model=cfg.veo_model,
+                prompt=p,
+                image=image,
+                config=types.GenerateVideosConfig(
+                    duration_seconds=8,  # ← I2V תומך רק ב-8,4,6 — לא 7
+                    aspect_ratio="9:16",
+                    output_gcs_uri=gcs_prefix,
+                ),
+            )
+            operation = await _poll(client, operation)
+            uri = operation.result.generated_videos[0].video.uri
+            logger.info(
+                "VideoAgent: payoff image-to-video -> GCS: %s", uri
+            )
+            return uri
+
+        try:
+            result = await breaker.call(_call)
+            return result  # ← חזור מיידי בהצלחה
+
+        except Exception as exc:
+            last_exc = exc
+            if _is_veo_overload(exc) and attempt < len(delays):
+                wait = delays[attempt]
+                logger.warning(
+                    "VideoAgent: payoff overload (attempt %d/4) — waiting %ds.",
+                    attempt + 1, wait,
+                )
+                await asyncio.sleep(wait)
+                continue
+            raise
+
+    raise last_exc or RuntimeError(
+        f"generate_video_from_frame failed after 4 attempts — extend_index={extend_index}"
+    )

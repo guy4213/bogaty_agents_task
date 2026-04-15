@@ -62,18 +62,21 @@ def _is_reel_script(text_item: dict) -> bool:
 def _validate_text_item(
     text_item: dict, platform: str, content_type: str, expected_lang: str
 ) -> list[str]:
-    # FIX: reel scripts are structured dicts, not text — skip plain-text validation.
-    # Validate the full_caption field instead if present.
     if _is_reel_script(text_item):
         errors = []
         scenes = text_item.get("scenes", [])
         if not scenes:
             errors.append("Reel script missing scenes")
         for s in scenes:
-            if not s.get("caption_text_en"):
-                errors.append(f"Scene {s.get('scene', '?')} missing caption_text_en")
+            # עברית — בדוק caption_text
+            # אנגלית — בדוק caption_text_en
+            if expected_lang == "he":
+                if not s.get("caption_text"):
+                    errors.append(f"Scene {s.get('scene', '?')} missing caption_text")
+            else:
+                if not s.get("caption_text_en"):
+                    errors.append(f"Scene {s.get('scene', '?')} missing caption_text_en")
         return errors
-
     errors   = []
     text     = text_item.get("text", "")
     hashtags = text_item.get("hashtags", [])
@@ -100,20 +103,44 @@ def _validate_text_item(
 def _validate_image_item(image_item: dict, platform: str, content_type: str) -> list[str]:
     return [] if image_item.get("s3_key") else ["Image missing S3 key"]
 
-def _validate_video_item(video_item: dict, platform: str) -> list[str]:
-    errors           = []
+
+def _validate_video_item(
+    video_item: dict, platform: str, lang: str = "he"
+) -> list[str]:
+    errors = []
+
+    # S3 key — חובה מוחלטת
+    if not video_item.get("s3_key"):
+        errors.append("Video missing S3 key")
+        return errors  # אין טעם לבדוק שאר אם אין קובץ
+
+    # Duration
     duration         = video_item.get("duration_sec", 0)
     min_dur, max_dur = VIDEO_DURATION_LIMITS.get(platform, (1, 600))
     if duration < min_dur or duration > max_dur:
-        errors.append(f"Video duration {duration}s out of range [{min_dur}s, {max_dur}s]")
-    if not video_item.get("has_captions"):
-        errors.append("Video missing embedded captions")
-    if not video_item.get("has_audio"):
-        errors.append("Video missing audio")
-    if not video_item.get("s3_key"):
-        errors.append("Video missing S3 key")
-    return errors
+        errors.append(
+            f"Video duration {duration}s out of range [{min_dur}s, {max_dur}s]"
+        )
 
+    # Captions — חובה, אבל שדה שונה לפי שפה
+    if not video_item.get("has_captions"):
+        if lang == "he":
+            errors.append(
+                "Hebrew captions missing — caption_text absent in one or more scenes"
+            )
+        else:
+            errors.append(
+                "English captions missing — caption_text_en absent in one or more scenes"
+            )
+
+    # has_audio — warning בלבד, לא failure
+    if not video_item.get("has_audio"):
+        logger.warning(
+            "Video has_audio=False — metadata issue, non-fatal for platform=%s",
+            platform,
+        )
+
+    return errors
 
 # ---------------------------------------------------------------------------
 # LLM quality gate — ONE batch call for all texts
@@ -290,7 +317,7 @@ async def run(state: ContentEngineState) -> dict:
     # 3. Video checks
     # ------------------------------------------------------------------
     for idx, video_item in enumerate(videos):
-        vid_errors = _validate_video_item(video_item, platform)
+        vid_errors = _validate_video_item(video_item, platform, language)
         passed     = len(vid_errors) == 0
         if not passed:
             all_passed = False
@@ -348,10 +375,19 @@ async def run(state: ContentEngineState) -> dict:
         task_id, item_index, passed_count, len(validation_results),
         all_passed, final_status, total_validator_cost,
     )
-
+    failed_results = [vr for vr in validation_results if not vr.get("passed")]
+    if failed_results:
+        logger.warning(
+            "[%s] ContentValidator: FAILED details — %s",
+            task_id,
+            json.dumps(failed_results, ensure_ascii=False, indent=2),
+        )
     return {
         "validation_results": validation_results,
         "retry_count":        new_retry_count,
         "status":             final_status,
         "cost_accumulated":   state.get("cost_accumulated", 0.0) + total_validator_cost,
     }
+
+
+

@@ -56,27 +56,32 @@ def _route_after_content_agent(state) -> Literal["image_agent", "content_validat
 def _route_after_image_agent(state: ContentEngineState) -> Literal["video_agent", "content_validator"]:
     return "video_agent" if state.get("pipeline_type") == "full_video" else "content_validator"
 
-def _route_after_validator(state: ContentEngineState) -> Literal["content_agent", "__end__"]:
+def _route_after_validator(
+    state: ContentEngineState,
+) -> Literal["content_agent", "__end__"]:
     from app.config import get_settings
+
     status      = state.get("status", "completed")
     retry_count = state.get("retry_count", 0)
     max_retries = get_settings().max_retries_per_item
+    pipeline    = state.get("pipeline_type", "text_only")
+    task_id     = state.get("task_id", "?")
 
-    # FIX: was `retry_count <= max_retries` → infinite loop when retry_count == max_retries.
-    # Correct condition: strictly less than, so we stop when exhausted.
-    if status == "processing" and retry_count < max_retries:
+    # ── full_video: אם וידאו כבר נוצר — אל תתחיל מחדש ──
+    if pipeline == "full_video" and state.get("generated_videos"):
         logger.info(
-            "[%s] Graph router: retry %d/%d → content_agent",
-            state.get("task_id", "?"), retry_count, max_retries,
+            "[%s] Graph router: full_video — video already generated → END "
+            "(status=%s, avoiding costly retry)",
+            task_id, status,
         )
+        return "__end__"
+
+    # ── שאר ה-pipelines — retry רגיל ──
+    if status == "processing" and retry_count < max_retries:
+        logger.info("[%s] Graph router: retry %d/%d → content_agent", task_id, retry_count, max_retries)
         return "content_agent"
 
-    logger.info(
-        "[%s] Graph router: → END (status=%s retry_count=%d)",
-        state.get("task_id", "?"), status, retry_count,
-    )
-    return END
-
+    return "__end__"
 
 def build_graph() -> tuple[StateGraph, MemorySaver]:
     builder = StateGraph(ContentEngineState)

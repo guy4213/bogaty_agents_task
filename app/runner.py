@@ -14,7 +14,7 @@ class ContentEngineState(TypedDict):
     language: str
     quantity: int
     description: str
-
+    food_reference_image: Optional[str]   
     # ------------------------------------------------------------------
     # Routing — set by Orchestrator
     # ------------------------------------------------------------------

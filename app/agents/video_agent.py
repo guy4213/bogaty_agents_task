@@ -1,65 +1,207 @@
 from __future__ import annotations
+from asyncio import subprocess
 import logging
+import pathlib
 
 from app.config import get_settings
 from app.graph.state import ContentEngineState
-from app.services.gemini_client import generate_video_initial, extend_video, download_video
+from app.services.gemini_client import generate_video_initial, extend_video, download_video,generate_video_from_frame
 from app.services.s3_client import upload_bytes, asset_key, upload_text
+from app.services.caption_service import extract_last_frame  
 
 logger = logging.getLogger(__name__)
 
 
-def _build_initial_prompt(scene: dict, lang: str, visual_style: str = "") -> str:
-    visual       = scene.get("visual_description", "")
-    audio_mood   = scene.get("audio_mood", "ambient kitchen sounds")
+def _build_initial_prompt(scene: dict, lang: str, visual_style: str = "", canonical_subject: str = "") -> str:
+    visual      = scene.get("visual_description", "")
+    audio_mood  = scene.get("audio_mood", "ambient sounds")
     style_anchor = f" Visual style: {visual_style}." if visual_style else ""
+    subject_lock = (
+        f" CANONICAL SUBJECT FOR THIS ENTIRE VIDEO: [{canonical_subject}]."
+        f" Establish this exact subject clearly in the opening frame."
+    ) if canonical_subject else ""
 
     if lang == "en":
-        caption = scene.get("caption_text", "")
+        caption = scene.get("caption_text_en", "")
         caption_instruction = (
             f' Render burnt-in subtitle text at the bottom of the frame: "{caption}".'
             if caption else ""
         )
     else:
-        # עברית — Veo לא תומך RTL, FFmpeg יטפל בזה
         caption_instruction = " No text overlays."
 
     return (
-        f"{visual}.{style_anchor}"
+        f"{visual}.{style_anchor}{subject_lock}"
+        f" Camera framing: medium shot with subject fully visible and centered."
+        f" Leave breathing room around the subject — do NOT crop or cut off edges."
+        f" Subject must be 100% in frame at all times."
+        f" IMPORTANT: This is a self-contained scene."
+        f" Do NOT anticipate or begin any next action."
+        f" The scene ends exactly as described — no transitions, no preparation for what comes next."
         f"{caption_instruction} "
         f"Audio: {audio_mood}. "
-        f"9:16 vertical format, 1080x1920, cinematic food videography, "
-        f"warm lighting, professional grade."
+        f"9:16 vertical format, 1080x1920, cinematic videography, "
+        f"professional grade."
     )
 
 
-def _build_extend_prompt(scene: dict, lang: str, visual_style: str = "", first_scene_visual: str = "") -> str:
-    visual       = scene.get("visual_description", "")
+def _build_extend_prompt(
+    scene: dict, lang: str, visual_style: str = "",
+    first_scene_visual: str = "", canonical_subject: str = ""
+) -> str:
+    visual      = scene.get("visual_description", "")
+    entry_state = scene.get("entry_state", "")
+    audio_mood  = scene.get("audio_mood", "")
+
     style_anchor = f" Maintain this exact visual style: {visual_style}." if visual_style else ""
-    anchor       = f" Reference scene 1: {first_scene_visual}." if first_scene_visual else ""
+
+    subject_lock = (
+        f" LOCKED SUBJECT: [{canonical_subject}]."
+        f" The ONLY subject in this scene is {canonical_subject}."
+        f" VISUAL LOCK: What appears in frame is EXCLUSIVELY {canonical_subject}."
+        f" ALL elements of {canonical_subject} MUST remain visible in frame at all times."
+        f" Do NOT remove, hide, or replace any component of {canonical_subject}."
+        f" FORBIDDEN: Do NOT substitute {canonical_subject} with anything else."
+        f" No variations. No new elements."
+    ) if canonical_subject else ""
+
+    scene_anchor = (
+        f" Reference opening scene: {first_scene_visual}."
+    ) if first_scene_visual else ""
+
+    continuity = (
+        f" START FROM THIS EXACT STATE: {entry_state}."
+        f" Do NOT go back in time. Do NOT repeat previous steps."
+    ) if entry_state else ""
+
+    no_repeat = (
+        f" STRICTLY FORBIDDEN: Do NOT repeat any action that already occurred"
+        f" in a previous scene."
+        f" Any pouring, adding, mixing, or sautéing of {canonical_subject}"
+        f" components has already happened and must NOT be shown again."
+        f" This scene continues AFTER all previous actions are fully complete."
+    ) if canonical_subject else ""
+
+    audio_instruction = (
+        f" Continue audio: {audio_mood}."
+        f" SAME music genre and energy as previous scene."
+    ) if audio_mood else ""
 
     if lang == "en":
-        caption = scene.get("caption_text", "")
+        caption = scene.get("caption_text_en", "")
         caption_instruction = f' Subtitle at bottom: "{caption}".' if caption else ""
     else:
         caption_instruction = " No text overlays."
 
     return (
-        f"Continue seamlessly: {visual}.{style_anchor}{anchor} "
-        f"CRITICAL — FORBIDDEN: No bananas, no unrelated food, no new ingredients. "
-        f"ONLY the exact same ingredients and kitchen from scene 1. "
-        f"SAME kitchen, SAME lighting, SAME food."
+        f"Continue seamlessly: {visual}.{style_anchor}{subject_lock}{scene_anchor}"
+        f"{continuity}"
+        f"{no_repeat}"
+        f" Camera framing: medium shot with subject fully visible and centered."
+        f" Leave breathing room around the subject — do NOT crop or cut off edges."
+        f" Subject must be 100% in frame at all times."
+        f" SAME location, SAME lighting as previous scene."
+        f"{audio_instruction}"
         f"{caption_instruction} "
     )
 
+
+def _build_payoff_prompt(
+    scene: dict, lang: str, visual_style: str = "",
+    canonical_subject: str = ""
+) -> str:
+    audio_mood  = scene.get("audio_mood", "")
+    entry_state = scene.get("entry_state", "")
+
+    style_anchor = f" Maintain this exact visual style: {visual_style}." if visual_style else ""
+
+    subject_lock = (
+        f" SUBJECT: [{canonical_subject}] — fully completed, plated, and still."
+        f" ALL elements of {canonical_subject} are visible and complete."
+    ) if canonical_subject else ""
+
+    continuity = (
+        f" CONFIRMED STATE: {entry_state}."
+        f" Everything described above is already done. Do not redo any of it."
+    ) if entry_state else ""
+
+    audio_instruction = (
+        f" Continue audio: {audio_mood}."
+        f" Same genre, slower and more cinematic energy — this is the final scene."
+    ) if audio_mood else ""
+
+    if lang == "en":
+        caption = scene.get("caption_text_en", "")
+        caption_instruction = f' Subtitle at bottom: "{caption}".' if caption else ""
+    else:
+        caption_instruction = " No text overlays."
+
+    return (
+        f"FINAL SCENE — everything is complete. No more actions.{style_anchor}{subject_lock}"
+        f"{continuity}"
+        f" FORBIDDEN: Do NOT show any cooking action, pouring, mixing, adding, or sautéing."
+        f" FORBIDDEN: Do NOT repeat any action from previous scenes."
+        f" The dish is already complete — only reveal it cinematically."
+        f" Camera slowly and smoothly pushes in from medium shot to close-up."
+        f" NOTHING MOVES except the camera."
+        f" Subject fully visible, centered, 100% in frame."
+        f" SAME location, SAME lighting as previous scene."
+        f"{audio_instruction}"
+        f"{caption_instruction} "
+        f"9:16 vertical format, 1080x1920, cinematic videography, professional grade."
+    )
+
+async def _download_single_clip(gcs_uri: str, project_id: str) -> bytes:
+    """הורד קליפ בודד מ-GCS."""
+    from google.cloud import storage as gcs
+    import asyncio
+    loop = asyncio.get_event_loop()
+
+    def _dl():
+        client = gcs.Client(project=project_id)
+        bucket_name = gcs_uri.split("/")[2]
+        blob_name   = "/".join(gcs_uri.split("/")[3:])
+        return client.bucket(bucket_name).blob(blob_name).download_as_bytes()
+
+    return await loop.run_in_executor(None, _dl)
+
+
+async def _trim_clip_async(video_bytes: bytes, duration: float) -> bytes:
+    """חתוך קליפ ל-duration שניות."""
+    import asyncio
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _trim_clip_sync, video_bytes, duration)
+
+
+def _trim_clip_sync(video_bytes: bytes, duration: float) -> bytes:
+    import static_ffmpeg, shutil
+    static_ffmpeg.add_paths()
+    ffmpeg_exe = shutil.which("ffmpeg")
+
+    tmp_dir = pathlib.Path("C:/tmp/ffmpeg_work")
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    inp = tmp_dir / "trim_in.mp4"
+    out = tmp_dir / "trim_out.mp4"
+    inp.write_bytes(video_bytes)
+
+    proc = subprocess.run(
+        [ffmpeg_exe, "-y", "-i", "trim_in.mp4",
+         "-t", str(duration), "-c", "copy", "trim_out.mp4"],
+        cwd=str(tmp_dir),
+        capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"FFmpeg trim failed: {proc.stderr[-300:]}")
+
+    result = out.read_bytes()
+    for f in [inp, out]:
+        try: f.unlink()
+        except Exception: pass
+    return result
+
 async def run(state: ContentEngineState) -> dict:
-    """
-    Video Agent with Tier 3 (node-level) checkpointing.
-    If this node is retried after a partial failure, the state will contain:
-      - current_video_ref: the Veo URI of the video generated so far
-      - completed_extends:  how many Extend calls already succeeded
-    The loop resumes from where it left off, avoiding redundant Veo API calls.
-    """
     cfg          = get_settings()
     task_id      = state["task_id"]
     item_index   = state["item_index"]
@@ -76,15 +218,15 @@ async def run(state: ContentEngineState) -> dict:
         logger.error("[%s] VideoAgent: no scenes found in generated_texts", task_id)
         raise ValueError("No scene data available for video generation")
 
-    required_extends = len(scenes) - 1  # 4 scenes = 3 extends = 29s
+    required_extends   = len(scenes) - 1
+    last_extend_idx    = required_extends - 1
     first_scene_visual = scenes[0].get("visual_description", "")
+    canonical_subject  = script.get("canonical_subject", first_scene_visual)
 
-    # ------------------------------------------------------------------
-    # Tier 3: Resume from checkpoint if partial work was done
-    # ------------------------------------------------------------------
     current_video_ref: str | None = state.get("current_video_ref")
     completed_extends: int        = state.get("completed_extends", 0)
-    all_video_refs: list[str]      = state.get("all_video_refs", [])
+    all_video_refs: list[str]     = state.get("all_video_refs", [])
+
     if current_video_ref:
         logger.info(
             "[%s] VideoAgent: RESUMING checkpoint — ref=%s extends=%d/%d",
@@ -96,53 +238,103 @@ async def run(state: ContentEngineState) -> dict:
             task_id, item_index, cfg.veo_initial_duration_sec,
             scenes[0].get("caption_text_en", "⚠️ MISSING"),
         )
-        initial_prompt    = _build_initial_prompt(scenes[0], lang, visual_style)
+        initial_prompt    = _build_initial_prompt(scenes[0], lang, visual_style, canonical_subject)
         current_video_ref = await generate_video_initial(initial_prompt)
         completed_extends = 0
-        all_video_refs    = [current_video_ref]    
+        all_video_refs    = [current_video_ref]
         logger.info("[%s] VideoAgent: initial clip ready — ref=%s", task_id, current_video_ref)
 
     # ------------------------------------------------------------------
-    # Extend loop — Tier 3 checkpoint saved after each iteration
+    # Extend loop
     # ------------------------------------------------------------------
     for extend_idx in range(completed_extends, required_extends):
-        scene         = scenes[extend_idx + 1]
-        extend_prompt = _build_extend_prompt(scene, lang, visual_style, first_scene_visual)
-        logger.info(
-            "[%s] VideoAgent: extend %d/%d scene=%d caption_en='%s'",
-            task_id, extend_idx + 1, required_extends,
-            scene.get("scene", extend_idx + 2),
-            scene.get("caption_text_en", "⚠️ MISSING"),
-        )
+        scene     = scenes[extend_idx + 1]
+        is_payoff = (extend_idx == last_extend_idx)
 
-        try:
-            current_video_ref = await extend_video(
-                video_uri=current_video_ref,
-                prompt=extend_prompt,
-                extend_index=extend_idx,
+        if is_payoff:
+            extend_prompt = _build_payoff_prompt(
+                scene, lang, visual_style, canonical_subject
             )
-            completed_extends = extend_idx + 1
-            all_video_refs.append(current_video_ref)
             logger.info(
-                "[%s] VideoAgent: extend %d done — ref=%s total_refs=%d",
-                task_id, completed_extends, current_video_ref, len(all_video_refs),
+                "[%s] VideoAgent: extend %d/%d PAYOFF (image-to-video from Scene 1) scene=%d",
+                task_id, extend_idx + 1, required_extends,
+                scene.get("scene", extend_idx + 2),
             )
-        except Exception as exc:
-            logger.error(
-                "[%s] VideoAgent: extend %d FAILED (%s) — "
-                "preserving state: completed_extends=%d ref=%s",
-                task_id, extend_idx + 1, exc, completed_extends, current_video_ref,
+
+            # ── Extract frame מScene 1 — consistency מושלמת ──
+            logger.info("[%s] VideoAgent: downloading Scene 1 for frame extraction", task_id)
+            scene1_bytes = await _download_single_clip(
+                all_video_refs[0],  # ← ref של Scene 1 תמיד ראשון
+                cfg.vertex_project_id,
             )
-            raise _PartialVideoError(
-            str(exc),
-            current_video_ref=current_video_ref,
-            completed_extends=completed_extends,
-            all_video_refs=all_video_refs,
-            generated_texts=state.get("generated_texts", []),  # ← הוסף
-        ) from exc
+            plating_image = extract_last_frame(scene1_bytes)
+            logger.info(
+                "[%s] VideoAgent: scene 1 frame extracted (%d bytes)",
+                task_id, len(plating_image),
+            )
+
+            try:
+                current_video_ref = await generate_video_from_frame(
+                    frame_bytes=plating_image,
+                    prompt=extend_prompt,
+                    extend_index=extend_idx,
+                )
+                completed_extends = extend_idx + 1
+                all_video_refs.append(current_video_ref)
+                logger.info(
+                    "[%s] VideoAgent: payoff done — ref=%s total_refs=%d",
+                    task_id, current_video_ref, len(all_video_refs),
+                )
+            except Exception as exc:
+                logger.error("[%s] VideoAgent: payoff FAILED (%s)", task_id, exc)
+                raise _PartialVideoError(
+                    str(exc),
+                    current_video_ref=current_video_ref,
+                    completed_extends=completed_extends,
+                    all_video_refs=all_video_refs,
+                    generated_texts=state.get("generated_texts", []),
+                ) from exc
+
+        else:
+            # ── סצנות 2-3: extend רגיל ──
+            extend_prompt = _build_extend_prompt(
+                scene, lang, visual_style, first_scene_visual, canonical_subject
+            )
+            logger.info(
+                "[%s] VideoAgent: extend %d/%d scene=%d caption_en='%s'",
+                task_id, extend_idx + 1, required_extends,
+                scene.get("scene", extend_idx + 2),
+                scene.get("caption_text_en", "⚠️ MISSING"),
+            )
+
+            try:
+                current_video_ref = await extend_video(
+                    video_uri=current_video_ref,
+                    prompt=extend_prompt,
+                    extend_index=extend_idx,
+                )
+                completed_extends = extend_idx + 1
+                all_video_refs.append(current_video_ref)
+                logger.info(
+                    "[%s] VideoAgent: extend %d done — ref=%s total_refs=%d",
+                    task_id, completed_extends, current_video_ref, len(all_video_refs),
+                )
+            except Exception as exc:
+                logger.error(
+                    "[%s] VideoAgent: extend %d FAILED (%s) — "
+                    "preserving state: completed_extends=%d ref=%s",
+                    task_id, extend_idx + 1, exc, completed_extends, current_video_ref,
+                )
+                raise _PartialVideoError(
+                    str(exc),
+                    current_video_ref=current_video_ref,
+                    completed_extends=completed_extends,
+                    all_video_refs=all_video_refs,
+                    generated_texts=state.get("generated_texts", []),
+                ) from exc
 
     # ------------------------------------------------------------------
-    # Step 3: Download final video from GCS
+    # Download + merge
     # ------------------------------------------------------------------
     logger.info("[%s] VideoAgent: merging %d clips from GCS", task_id, len(all_video_refs))
     if get_settings().dry_run:
@@ -159,7 +351,7 @@ async def run(state: ContentEngineState) -> dict:
     total_duration = cfg.veo_initial_duration_sec + required_extends * cfg.veo_extend_duration_sec
 
     # ------------------------------------------------------------------
-    # Step 4: Burn Hebrew captions with FFmpeg (language=he only)
+    # Burn Hebrew captions
     # ------------------------------------------------------------------
     if lang == "he":
         logger.info("[%s] VideoAgent: burning Hebrew captions with FFmpeg", task_id)
@@ -181,12 +373,11 @@ async def run(state: ContentEngineState) -> dict:
         logger.info("[%s] VideoAgent: captions done", task_id)
 
     # ------------------------------------------------------------------
-    # Step 5: Upload final video to S3
+    # Upload to S3
     # ------------------------------------------------------------------
     video_key = asset_key(task_id, platform, content_type, item_index, "video.mp4")
     await upload_bytes(video_key, video_bytes, content_type="video/mp4")
 
-    # Upload script — Hebrew captions preserved here
     script_text = "\n\n".join(
         f"Scene {s.get('scene', i+1)} ({s.get('duration_sec', 7)}s):\n"
         f"Visual: {s.get('visual_description', '')}\n"
@@ -199,7 +390,10 @@ async def run(state: ContentEngineState) -> dict:
 
     veo_cost = 0.50 + required_extends * 0.20
 
-    has_captions = all(bool(s.get("caption_text_en")) for s in scenes)
+    if lang == "he":
+        has_captions = all(bool(s.get("caption_text")) for s in scenes)
+    else:
+        has_captions = all(bool(s.get("caption_text_en")) for s in scenes)
 
     video_record = {
         "s3_key":           video_key,
@@ -223,13 +417,14 @@ async def run(state: ContentEngineState) -> dict:
         "cost_accumulated":  state.get("cost_accumulated", 0.0) + veo_cost,
     }
 
-
 class _PartialVideoError(Exception):
-    def __init__(self, message: str, current_video_ref: str, completed_extends: int, 
-                 all_video_refs: list[str] | None = None,
-                 generated_texts: list[dict] | None = None):  # ← הוסף
+    def __init__(
+        self, message: str, current_video_ref: str, completed_extends: int,
+        all_video_refs: list[str] | None = None,
+        generated_texts: list[dict] | None = None,
+    ):
         super().__init__(message)
         self.current_video_ref = current_video_ref
         self.completed_extends = completed_extends
         self.all_video_refs    = all_video_refs or []
-        self.generated_texts   = generated_texts or []  # ← הוסף
+        self.generated_texts   = generated_texts or []
