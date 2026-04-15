@@ -34,15 +34,6 @@ HASHTAG_LIMITS  = {
     "telegram": 0,   "facebook": 10,
 }
 
-# Angles list shared with mock so both pick the same angle for a given item_index
-CAPTION_ANGLES = [
-    "restaurant ambiance and atmosphere",
-    "close-up of the dish and ingredients",
-    "the overall dining experience and mood",
-    "behind-the-scenes / preparation story",
-    "personal connection / why this meal matters",
-]
-
 
 # ---------------------------------------------------------------------------
 # Prompt builders
@@ -201,8 +192,10 @@ Define the single specific subject of this video.
 Rules:
 - Be hyper-specific. Name the exact object, food, person, or item.
 - This exact string MUST appear at the start of EVERY scene's visual_description.
-- ✅ GOOD: "thin spaghetti pasta with cherry tomatoes and garlic"
-- ❌ BAD: "pasta" / "food" / "the dish"
+- ✅ GOOD (food): "thin spaghetti pasta with cherry tomatoes and garlic"
+- ✅ GOOD (travel): "sunset view from Santorini cliffside at golden hour"
+- ✅ GOOD (tech): "matte black mechanical keyboard with RGB lighting"
+- ❌ BAD: "pasta" / "food" / "the subject" / "the item"  # BUGFIX
 
 ════════════════════════════════════════
 STEP 2 — DEFINE THE VISUAL STYLE
@@ -393,17 +386,11 @@ def _extract_json(text: str) -> Any:
             exc,
             text[:500]
         )
-        return None  
+        raise json.JSONDecodeError(str(exc), text, 0)  # BUGFIX
 
 
 
-def _extract_visual_style(parsed: Any) -> str:
-    if isinstance(parsed, dict):
-        return parsed.get("visual_style_descriptor", "")
-    return ""
-
-
-def _extract_visual_style(parsed: Any) -> str:
+def _extract_visual_style(parsed: Any) -> str:  # BUGFIX
     if isinstance(parsed, dict):
         return parsed.get("visual_style_descriptor", "")
     return ""
@@ -519,6 +506,7 @@ async def run(state: ContentEngineState) -> dict:
         "current_video_ref": state.get("current_video_ref") if is_video_checkpoint else None,
         "completed_extends": state.get("completed_extends", 0) if is_video_checkpoint else 0,
         "all_video_refs":    state.get("all_video_refs", []) if is_video_checkpoint else [],
+        "content_category":  state.get("content_category", ""),  # BUGFIX
     }
 
     # visual_style_descriptor: first item sets the anchor; subsequent items keep
