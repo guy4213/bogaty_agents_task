@@ -203,9 +203,13 @@ STEP 2 — DEFINE THE VISUAL STYLE
 Define a "visual_style_descriptor" — one sentence (max 25 words) locking:
   lighting temperature, color palette, camera style, depth of field, and mood.
 
-Examples:
-- (Lifestyle/Food): "Warm candlelit tones, rich ochre palette, shallow DOF close-ups, intimate mood."
-- (Tech/Real Estate): "Cool blue lighting, crisp high-contrast shadows, wide-angle fluid movement, futuristic vibe."
+Examples by category — pick the style that fits your topic:  # BUGFIX
+- (Food/Lifestyle): "Warm candlelit tones, rich ochre palette, shallow DOF close-ups, intimate mood."
+- (Real Estate): "Bright natural light, warm whites, wide-angle airy composition, aspirational mood."
+- (Travel): "Vibrant saturated colors, golden hour warmth, sweeping cinematic movement, adventurous mood."
+- (Fitness): "High contrast dramatic shadows, cool steel tones, dynamic motion energy, powerful mood."
+- (Technology): "Clean studio whites with accent RGB glow, macro precision close-ups, sleek modern mood."
+- (News/Events): "Neutral balanced daylight, clean editorial framing, authoritative and clear mood."
 
 Every scene's visual_description MUST weave these exact photometric properties naturally.
 Same lighting, same palette, same texture and mood throughout all 4 scenes.
