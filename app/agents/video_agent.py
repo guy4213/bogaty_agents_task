@@ -77,8 +77,7 @@ def _build_extend_prompt(
     no_repeat = (
         f" STRICTLY FORBIDDEN: Do NOT repeat any action that already occurred"
         f" in a previous scene."
-        f" Any actions involving {canonical_subject} that occurred in previous scenes have already happened and must NOT be shown again."
-        f" components has already happened and must NOT be shown again."
+        f" Any actions involving {canonical_subject} that occurred in previous scenes have already happened and must NOT be shown again."  # BUGFIX
         f" This scene continues AFTER all previous actions are fully complete."
     ) if canonical_subject else ""
 
@@ -116,7 +115,7 @@ def _build_payoff_prompt(
     style_anchor = f" Maintain this exact visual style: {visual_style}." if visual_style else ""
 
     subject_lock = (
-        f" SUBJECT: [{canonical_subject}] — fully completed, plated, and still."
+        f" SUBJECT: [{canonical_subject}] — fully completed and presented in its final state."  # BUGFIX
         f" ALL elements of {canonical_subject} are visible and complete."
     ) if canonical_subject else ""
 
