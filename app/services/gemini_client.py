@@ -159,9 +159,9 @@ async def _generate_with_reference(
 
     anchored_prompt = (
         f"Using the exact visual style from the reference image: {prompt}. "
-        f"PRESERVE: color palette, lighting temperature, camera angle, depth of field, plating style. "
-        f"Generate a NEW scene — do not copy the dish, only the visual language."
-    )
+        f"PRESERVE: color palette, lighting temperature, camera angle, depth of field, and overall mood. "
+        f"Generate a NEW scene — do not copy the subject, only the visual language."
+    )  # BUGFIX: removed food-specific "plating style" and "dish"
 
     response = await client.aio.models.edit_image(
         model=get_settings().image_model_style_ref,   # ← Gemini עם style reference
