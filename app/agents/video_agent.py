@@ -77,7 +77,7 @@ def _build_extend_prompt(
     no_repeat = (
         f" STRICTLY FORBIDDEN: Do NOT repeat any action that already occurred"
         f" in a previous scene."
-        f" Any pouring, adding, mixing, or sautéing of {canonical_subject}"
+        f" Any actions involving {canonical_subject} that occurred in previous scenes have already happened and must NOT be shown again."
         f" components has already happened and must NOT be shown again."
         f" This scene continues AFTER all previous actions are fully complete."
     ) if canonical_subject else ""
@@ -137,19 +137,19 @@ def _build_payoff_prompt(
         caption_instruction = " No text overlays."
 
     return (
-        f"FINAL SCENE — everything is complete. No more actions.{style_anchor}{subject_lock}"
-        f"{continuity}"
-        f" FORBIDDEN: Do NOT show any cooking action, pouring, mixing, adding, or sautéing."
-        f" FORBIDDEN: Do NOT repeat any action from previous scenes."
-        f" The dish is already complete — only reveal it cinematically."
-        f" Camera slowly and smoothly pushes in from medium shot to close-up."
-        f" NOTHING MOVES except the camera."
-        f" Subject fully visible, centered, 100% in frame."
-        f" SAME location, SAME lighting as previous scene."
-        f"{audio_instruction}"
-        f"{caption_instruction} "
-        f"9:16 vertical format, 1080x1920, cinematic videography, professional grade."
-    )
+            f"FINAL SCENE — everything is complete. No more actions.{style_anchor}{subject_lock}"
+            f"{continuity}"
+            f" FORBIDDEN: Do NOT show any active process, building, moving, or assembly."
+            f" FORBIDDEN: Do NOT repeat any action from previous scenes."
+            f" The subject is already in its ultimate final state — only reveal it cinematically."
+            f" Camera slowly and smoothly pushes in from medium shot to close-up."
+            f" NOTHING MOVES except the camera."
+            f" Subject fully visible, centered, 100% in frame."
+            f" SAME location, SAME lighting as previous scene."
+            f"{audio_instruction}"
+            f"{caption_instruction} "
+            f"9:16 vertical format, 1080x1920, cinematic videography, professional grade."
+        )
 
 async def _download_single_clip(gcs_uri: str, project_id: str) -> bytes:
     """הורד קליפ בודד מ-GCS."""
@@ -267,15 +267,15 @@ async def run(state: ContentEngineState) -> dict:
                 all_video_refs[0],  # ← ref של Scene 1 תמיד ראשון
                 cfg.vertex_project_id,
             )
-            plating_image = extract_last_frame(scene1_bytes)
+            extracted_anchor_frame = extract_last_frame(scene1_bytes)
             logger.info(
                 "[%s] VideoAgent: scene 1 frame extracted (%d bytes)",
-                task_id, len(plating_image),
+                task_id, len(extracted_anchor_frame),
             )
 
             try:
                 current_video_ref = await generate_video_from_frame(
-                    frame_bytes=plating_image,
+                    frame_bytes=extracted_anchor_frame,
                     prompt=extend_prompt,
                     extend_index=extend_idx,
                 )

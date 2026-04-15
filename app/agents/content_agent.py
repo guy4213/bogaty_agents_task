@@ -11,19 +11,15 @@ from app.services.s3_client import upload_json, asset_key
 
 logger = logging.getLogger(__name__)
 
-PERSONAS = [
-    ("food_blogger",         "enthusiastic food blogger who documents every meal"),
-    ("home_cook",            "passionate home cook always looking for new recipes"),
-    ("nutrition_enthusiast", "health-conscious person focused on balanced eating"),
-    ("skeptical_commenter",  "slightly skeptical but curious person"),
-    ("cooking_beginner",     "complete beginner just learning to cook"),
-    ("professional_chef",    "experienced chef with high standards"),
-    ("busy_parent",          "time-strapped parent feeding a family"),
-    ("student_budget",       "student cooking on a tight budget"),
-    ("food_photographer",    "food photographer obsessed with presentation"),
-    ("diet_conscious",       "diet-conscious person watching their macros"),
-]
 
+
+NARRATIVE_FRAMEWORKS = [
+    "The Hook & Overview: Focus on the grand result, the main value, or the big picture.",
+    "The Details: Focus on a specific interesting component, feature, or behind-the-scenes element.",
+    "The Journey: Focus on the process, the effort, or how it came to be.",
+    "The Personal Connection: Focus on why this matters, the emotional impact, or a relatable thought.",
+    "The Takeaway: Focus on actionable advice, a summary thought, or an engaging question for the audience."
+]
 ENTHUSIASM_LEVELS = [
     "very excited", "casually positive", "mildly curious",
     "warmly supportive", "humorously enthusiastic",
@@ -65,21 +61,6 @@ def _build_comments_retry_prompt(state: ContentEngineState, failed_items: list[d
         else "Write ALL comments in English. Natural, conversational language only."
     )
 
-    personas = [
-        "food_blogger", "home_cook", "nutrition_enthusiast", "skeptical_commenter",
-        "cooking_beginner", "professional_chef", "busy_parent", "student_budget",
-        "food_photographer", "diet_conscious",
-    ]
-
-    # בנה רשימת הפרסונות לפריטים שנכשלו
-    failed_personas = []
-    for idx in failed_indices:
-        if idx is not None:
-            persona = personas[idx % len(personas)]
-            failed_personas.append(f"index {idx}: persona={persona}")
-
-    failed_list = "\n".join(f"  - {p}" for p in failed_personas)
-
     feedback_items = []
     for item in failed_items:
         idx   = item.get("item_id")
@@ -89,11 +70,11 @@ def _build_comments_retry_prompt(state: ContentEngineState, failed_items: list[d
             feedback_items.append(f"  - index {idx}: score={score}, issues={errors}")
 
     feedback_str = "\n".join(feedback_items) if feedback_items else "  - Score too low, sounded unnatural or AI-generated"
+    indices_str = ", ".join(map(str, failed_indices))
 
-    return f"""You previously generated {state.get('quantity', 50)} Instagram comments about: "{desc}"
+    return f"""You previously generated comments about: "{desc}"
 
-The following {failed_count} comments FAILED quality validation and must be regenerated:
-{failed_list}
+The following {failed_count} comments (indices: {indices_str}) FAILED quality validation and must be regenerated.
 
 Failure reasons:
 {feedback_str}
@@ -101,35 +82,27 @@ Failure reasons:
 {lang_instruction}
 
 REGENERATE ONLY these {failed_count} comments. Use the SAME index numbers as above.
-Each comment must:
-- Sound like a real person wrote it spontaneously
-- Match the persona naturally (not robotically)
-- Be relevant to: "{desc}"
-- Be unique — different from all other comments in the batch
-- NOT sound AI-generated or overly enthusiastic
+Rules:
+- INVENT PERSONAS: For each comment, invent a NEW, highly specific and relevant persona based on the topic.
+- Sound like a real person wrote it spontaneously.
+- Match the persona naturally (not robotically).
+- Be relevant to: "{desc}".
+- Be unique — different from all other comments in the batch.
+- NOT sound AI-generated or overly enthusiastic.
 
 Platform: {platform}
 
 Return ONLY a valid JSON array with exactly {failed_count} items. No preamble, no markdown.
 Schema:
 [
-  {{"index": <original_index>, "text": "...", "persona": "<persona_name>"}},
+  {{"index": <original_index>, "text": "...", "persona": "<invented_persona_name>"}},
   ...
 ]"""
 def _build_comments_prompt(state: ContentEngineState) -> str:
-    """All N comments in one single Claude call — unchanged."""
     quantity = state["quantity"]
     lang     = state["language"]
     desc     = state["description"]
 
-    persona_assignments = []
-    for idx in range(quantity):
-        persona_name, persona_desc = PERSONAS[idx % len(PERSONAS)]
-        enthusiasm = ENTHUSIASM_LEVELS[idx % len(ENTHUSIASM_LEVELS)]
-        persona_assignments.append(
-            f"  Comment {idx + 1}: persona={persona_name} ({persona_desc}), tone={enthusiasm}"
-        )
-    persona_block    = "\n".join(persona_assignments)
     lang_instruction = (
         "Write all comments in Hebrew (rtl, natural colloquial Hebrew)."
         if lang == "he" else "Write all comments in English."
@@ -139,29 +112,20 @@ def _build_comments_prompt(state: ContentEngineState) -> str:
 
 {lang_instruction}
 
-Persona assignments:
-{persona_block}
-
 Rules:
-- Each comment must sound authentically human, NOT AI-generated
-- Each comment must be distinct — no duplicate phrasing
-- Length: 1-3 sentences per comment
-- No hashtags in comments
-- Match the persona's voice and the specified tone
+- INVENT PERSONAS: For each comment, invent a highly specific and relevant persona based on the topic. 
+  (e.g., if the topic is Real Estate, personas could be 'first-time buyer' or 'investor'. If Travel, 'budget backpacker' or 'luxury traveler').
+- Each comment must sound authentically human, NOT AI-generated.
+- Each comment must be distinct — no duplicate phrasing or repeated personas.
+- Length: 1-3 sentences per comment.
+- No hashtags in comments.
+- Match the invented persona's voice and tone perfectly to the comment text.
 
 Return ONLY a valid JSON array with {quantity} objects. No preamble, no markdown fences.
-Schema per object: {{"index": 0, "text": "...", "persona": "food_blogger"}}"""
+Schema per object: {{"index": 0, "text": "...", "persona": "invented_persona_name"}}"""
 
 
 def _build_single_caption_prompt(state: ContentEngineState) -> str:
-    """
-    FIX: generates exactly ONE caption per item, using item_index to select
-    the angle. Previously the function generated `quantity` captions every
-    time and image_agent always used index 0 → all posts got the same angle.
-
-    Also: visual_style_descriptor is only requested on item 0 (it anchors
-    the style for all images via the style_reference_image mechanism).
-    """
     item_index    = state["item_index"]
     lang          = state["language"]
     desc          = state["description"]
@@ -174,39 +138,41 @@ def _build_single_caption_prompt(state: ContentEngineState) -> str:
         "Write the caption in Hebrew." if lang == "he"
         else "Write the caption in English."
     )
-    angle = CAPTION_ANGLES[item_index % len(CAPTION_ANGLES)]
+    
+    # שליפת השלד הסיפורי הכללי שישתנה מפוסט לפוסט
+    framework = NARRATIVE_FRAMEWORKS[item_index % len(NARRATIVE_FRAMEWORKS)]
 
-    # Only item 0 generates the visual_style_descriptor anchor.
-    # Items 1+ receive it via state from the runner.
     style_section = """
 Also produce a "visual_style_descriptor" — one sentence (max 25 words) that locks
 the visual style for ALL images in this batch. Specify: lighting temperature,
 color palette, camera angle, depth of field, and mood.
-Example: "Warm candlelit tones, rich ochre palette, shallow DOF close-up, intimate romantic mood."
+
+Also produce a "content_category" in 1-2 words. 
+CRITICAL RULE: If the content is related to food, cooking, baking, a recipe, or any culinary topic, you MUST output exactly the word 'food'. 
+For any other topic, output the specific descriptive category (e.g., 'fitness', 'real estate', 'technology', 'science').
 """ if is_first_item else ""
 
     return f"""Generate exactly 1 {platform} post caption about: "{desc}"
 
 item_index: {item_index}
-Angle for this caption: {angle}
 
 {lang_instruction}
 
 Rules:
+- Narrative Angle: Adapt this generic framework to the specific topic: "{framework}"
 - Max {char_limit} characters
 - Include {hashtag_limit} relevant hashtags (inline at end)
 - Tone: authentic, engaging, platform-appropriate for {platform}
-- Angle MUST be: {angle}
 {style_section}
 Return ONLY a valid JSON object. No preamble, no markdown fences.
 Schema:
 {{
   "visual_style_descriptor": "...",
+  "content_category": "...",
   "captions": [
-    {{"index": 0, "text": "...", "hashtags": ["#tag1", "#tag2"], "angle": "{angle}"}}
+    {{"index": {item_index}, "text": "...", "hashtags": ["#tag1", "#tag2"], "angle": "{framework}"}}
   ]
 }}"""
-
 def _build_reels_script_prompt(state: ContentEngineState) -> str:
     lang = state["language"]
     desc = state["description"]
@@ -244,49 +210,46 @@ STEP 2 — DEFINE THE VISUAL STYLE
 Define a "visual_style_descriptor" — one sentence (max 25 words) locking:
   lighting temperature, color palette, camera style, depth of field, and mood.
 
-Example: "Warm candlelit tones, rich ochre palette, shallow DOF close-ups, slow cinematic movement, intimate mood."
+Examples:
+- (Lifestyle/Food): "Warm candlelit tones, rich ochre palette, shallow DOF close-ups, intimate mood."
+- (Tech/Real Estate): "Cool blue lighting, crisp high-contrast shadows, wide-angle fluid movement, futuristic vibe."
 
 Every scene's visual_description MUST weave these exact photometric properties naturally.
 Same lighting, same palette, same texture and mood throughout all 4 scenes.
-
 ════════════════════════════════════════
-STEP 3 — THE NARRATIVE ARC (4 SCENES: 8s+7s+7s+7s)
+STEP 3 — CATEGORIZE THE CONTENT
+════════════════════════════════════════
+Analyze the content and define its category in 1-2 words. 
+CRITICAL RULE: If the content is related to food, cooking, baking, a recipe, or any culinary topic, you MUST output exactly the word 'food'. 
+For any other topic, output the specific descriptive category (e.g., 'fitness', 'real estate', 'technology', 'science').
+════════════════════════════════════════
+════════════════════════════════════════
+STEP 4 — THE NARRATIVE ARC (4 SCENES: 8s+7s+7s+7s)
 ════════════════════════════════════════
 Structure is NON-CHRONOLOGICAL. Scene 1 is the HOOK. Scenes 2-4 run chronologically.
-This applies to ANY topic (Food, Sports, Real Estate, Tech, etc.).
+This applies to ANY topic (Food, Travel, Sports, Real Estate, Tech, etc.).
 
-- Scene 1 (8s): THE HOOK — show the FINISHED result with key ingredients/components visible.
-  The viewer must immediately think "I want that."
-  (Food: finished plated dish + raw ingredients around it.
-   Sports: peak moment/winning shot. Real Estate: glowing exterior. Tech: final glowing setup).
+- Scene 1 (8s): THE HOOK / THE VISION — Show the ultimate payoff, peak moment, or final destination to grab attention.
+  (Travel: stunning view of the final destination. Food: finished plated dish. Real Estate: glowing exterior).
 
-- Scene 2 (7s): THE INGREDIENTS — raw components beautifully laid out, then first prep motion begins.
-  Show ALL components clearly before any transformation begins.
-  (Food: raw ingredients spread out, first prep motion.
-   Sports: equipment laid out, athlete stretching.
-   Real Estate: opening front door, first look inside.
-   Tech: parts unboxed and laid out, first assembly step).
+- Scene 2 (7s): THE FOUNDATION / THE START — The starting point before the main action or journey begins.
+  Show the initial components or situation clearly.
+  (Travel: packing a suitcase, passports, or arriving at the airport. Food: raw ingredients spread out. Tech: unboxing).
 
-- Scene 3 (7s): THE PROCESS — show the FULL cooking process, not just the final toss.
-  The viewer needs to see HOW it's made, not just the end result.
+- Scene 3 (7s): THE PROGRESSION / THE ACTION — The core journey, transformation, or active process.
+  The viewer needs to see the transition from start to finish.
   CRITICAL TIMING RULE:
-  - Seconds 0-2: adding ingredients to the pan — pouring sauce, placing pasta in.
-  - Seconds 2-4: active cooking — sizzling, stirring, combining everything together.
-  - Seconds 4-7: action SLOWS DOWN. Dish settles in pan, nearly static.
-    End on a still frame — completed dish in pan, no motion.
-  This full arc (add → cook → settle) is non-negotiable.
-  (Food: pour sauce into pan → add pasta → toss → settle still in pan.
-   Sports: approach bar → execute lift → hold position still.
-   Real Estate: enter room → pan across features → camera settles on hero spot.
-   Tech: connect final cable → power on → device glowing still).
+  - Seconds 0-2: action begins — introducing key elements (departing, pouring, entering).
+  - Seconds 2-4: active progression — combining, building, traveling, exploring.
+  - Seconds 4-7: action decelerates. Subject settles. End on a nearly still frame.
+  This full arc (initiate → peak action → settle) is non-negotiable.
+  (Travel: moving between locations → exploring → arriving at the hotel room. 
+   Food: combine in pan → cook → settle still. 
+   Real Estate: enter room → pan across → settle on hero spot).
 
-- Scene 4 (7s): THE PAYOFF — the dish is now PLATED on a beautiful plate/bowl.
-  NOT in the pan — it has been transferred to a plate for the final presentation.
-  Camera slowly pushes in on the plated dish.
-  (Food: finished dish plated on ceramic bowl/plate, garnished, beauty shot.
-   Sports: athlete holding trophy/celebrating after the effort.
-   Real Estate: final hero room fully styled and lit.
-   Tech: completed device powered on, glowing screen).
+- Scene 4 (7s): THE FINAL DESTINATION / THE PAYOFF — The subject is fully complete and presented in its final ideal environment.
+  Camera slowly pushes in for a hero presentation.
+  (Travel: relaxing at the final scenic spot. Food: plated dish beauty shot. Tech: completed device glowing).
 
 For EACH scene provide:
 
@@ -299,17 +262,13 @@ For EACH scene provide:
      ❌ BAD: "close-up shot" with no transition described
    - 🚫 ZERO HALLUCINATION RULE: describe ONLY physical visible items.
      Do NOT describe sounds, music, smells, or abstract concepts.
-     Do NOT mention musical instruments unless they are the explicit topic of the video.
 
 2. entry_state:
    - One precise sentence: the EXACT visual state at frame zero of this scene
-   - Scene 1: "opening shot — finished result already visible"
-   - Scene 2: "cut to raw ingredients laid out — chronological sequence begins"
-   - Scene 3: describe what is already done when we cut in
-     Example: "ingredients prepped and ready, pan already hot, oil shimmering"
-   - Scene 4: MUST list every action from scene 3 as already completed
-     Example: "pasta fully coated in sauce, settled and still in pan — no motion"
-     ⚠️ If scene 3 showed pouring/adding/mixing — scene 4 entry_state MUST confirm it is done AND still.
+   - Scene 1: "opening shot — final vision/result already visible"
+   - Scene 2: "cut to initial state/components — chronological sequence begins"
+   - Scene 3: describe what is already done when we cut in (e.g., "journey has begun, ready for main action")
+   - Scene 4: MUST list every action from scene 3 as already completed (e.g., "arrived at destination and completely settled — no motion")
 
 3. caption_text / caption_text_en:
    - caption_text: in {("Hebrew" if lang == "he" else "English")} — for the script file
@@ -320,27 +279,22 @@ For EACH scene provide:
    - Specify music energy + tempo + ambient sounds
    - Use abstract musical descriptors ONLY — no instrument names
    - 🚫 FORBIDDEN: "guitar", "piano", "drums", or any physical instrument name
-   - ✅ GOOD: "upbeat warm melodic rhythm, energetic and flowing, with sizzling ambient sounds"
    - Genre MUST stay consistent across all 4 scenes (energy can evolve)
-   - Scene 3 audio MUST include a natural energy decrease toward the end
-     to match the visual deceleration
+   - Scene 3 audio MUST include a natural energy decrease toward the end to match the visual deceleration
 
 ════════════════════════════════════════
 STRICT ANTI-HALLUCINATION RULES
 ════════════════════════════════════════
-1. NO NEW OBJECTS: Do NOT introduce random items, people, or background elements
-   not present in Scene 1.
-2. NO CROSS-MODALITY: visual_description must be 100% silent.
-   Never describe sound, music, or smell inside a visual field.
-3. FORWARD MOTION ONLY: within scenes 2-4, time moves forward only.
-   No rewinding, no undoing, no repeating previous actions.
-4. NO REPEAT ACTIONS: if an action occurred in scene N, it CANNOT occur again in scene N+1.
+1. LOGICAL CONTINUITY (Context-Aware Elements): Elements must make logical sense for the specific category.
+   - For "CLOSED" processes (like cooking, recipes, or product assembly): Do NOT introduce new ingredients, magical objects, or people not established in the first scenes. 
+   - For "OPEN" journeys (like travel, real estate tours, or events): You MAY introduce new environments, landscapes, or objects (e.g., statues, landmarks, different rooms), but they MUST logically belong to the specific stated itinerary/location. No bizarre or out-of-context additions.
+2. NO CROSS-MODALITY: visual_description must be 100% silent. Never describe sound, music, or smell inside a visual field.
+3. FORWARD MOTION ONLY: within scenes 2-4, time and the journey move forward only. No rewinding, no undoing.
+4. NO REPEAT ACTIONS: if a specific action or location was the focus in scene N, it CANNOT be the exact same focus in scene N+1.
 5. SCENE 3 MUST DECELERATE: the last 3 seconds of scene 3 must be calm and nearly static.
-6. SUBJECT LOCK: Do NOT change the type or variety of the canonical subject between scenes.
-7. ADAPT TO TOPIC: use terminology appropriate to the niche.
-8. SCENE 3 FULL ARC: Scene 3 MUST show the complete process:
-   adding ingredients → active cooking → settling still.
-   Do NOT skip directly to tossing — show the full preparation within the scene.
+6. SUBJECT LOCK: The "canonical_subject" (the core theme or main entity) must remain the central anchor across all scenes, even if the background or location completely changes.
+7. ADAPT TO TOPIC: use terminology appropriate to the niche (e.g., culinary terms for food, geographical/architectural terms for travel and real estate).
+8. SCENE 3 FULL ARC: Scene 3 MUST show a complete progression (initiation → main action/movement → settling still). Do NOT skip directly to the end of the action.
 ════════════════════════════════════════
 OUTPUT FORMAT — CRITICAL
 ════════════════════════════════════════
@@ -352,6 +306,7 @@ The first character MUST be {{ and the last MUST be }}.
   "index": 0,
   "canonical_subject": "...",
   "visual_style_descriptor": "...",
+  "content_category": "...",
   "scenes": [
     {{
       "scene": 1,
@@ -365,26 +320,26 @@ The first character MUST be {{ and the last MUST be }}.
     {{
       "scene": 2,
       "duration_sec": 7,
-      "entry_state": "cut to raw ingredients laid out — chronological sequence begins",
-      "visual_description": "[canonical_subject] — [raw components laid out + first prep motion + fluid camera + lighting/mood]",
+      "entry_state": "cut to raw components/ingredients laid out — chronological sequence begins",
+      "visual_description": "[canonical_subject] — [raw components laid out + first prep/action motion + fluid camera + lighting/mood]",
       "caption_text": "...",
       "caption_text_en": "...",
       "audio_mood": "..."
     }},
-{{
-  "scene": 3,
-  "duration_sec": 7,
-  "entry_state": "ingredients prepped, pan hot — ready to combine",
-  "visual_description": "[canonical_subject] — [sauce poured in + pasta added + tossed together + settles still, fluid camera + lighting/mood]",
-  "caption_text": "...",
-  "caption_text_en": "...",
-  "audio_mood": "... peak energy seconds 0-4, decreasing toward end"
-}}
+    {{
+      "scene": 3,
+      "duration_sec": 7,
+      "entry_state": "components prepped and ready for main action",
+      "visual_description": "[canonical_subject] — [main active transformation/process occurs + subject settles completely still at the end, fluid camera + lighting/mood]",
+      "caption_text": "...",
+      "caption_text_en": "...",
+      "audio_mood": "... peak energy seconds 0-4, decreasing toward end"
+    }},
     {{
       "scene": 4,
       "duration_sec": 7,
-      "entry_state": "dish has been plated on a beautiful ceramic plate, garnished and ready",
-      "visual_description": "[canonical_subject] — plated on ceramic dish, garnished, camera slowly pushing in on the plated dish.",
+      "entry_state": "subject is fully complete and presented in its final environment",
+      "visual_description": "[canonical_subject] — fully presented in its final state, [specific environmental details], camera slowly pushing in.",
       "caption_text": "...",
       "caption_text_en": "...",
       "audio_mood": "..."
@@ -395,14 +350,57 @@ The first character MUST be {{ and the last MUST be }}.
 }}"""
 
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
 def _extract_json(text: str) -> Any:
-    cleaned = re.sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()
-    return json.loads(cleaned)
+    try:
+        # ניקוי markdown
+        cleaned = text.replace("```json", "").replace("```", "").strip()
+
+        start_obj = cleaned.find('{')
+        start_arr = cleaned.find('[')
+
+        # אין JSON בכלל
+        if start_obj == -1 and start_arr == -1:
+            raise ValueError("No JSON start found")
+
+        # בחירת התחלה נכונה
+        if start_arr != -1 and (start_obj == -1 or start_arr < start_obj):
+            start = start_arr
+            end = cleaned.rfind(']')
+        else:
+            start = start_obj
+            end = cleaned.rfind('}')
+
+        # אם לא נמצא סוף
+        if end == -1:
+            raise ValueError("No JSON end found")
+
+        json_str = cleaned[start:end + 1]
+
+        # ניסיון parse ראשון
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError:
+            # 🔥 ניסיון תיקון בסיסי
+            json_str = json_str.replace("\n", "").replace("\t", "")
+            return json.loads(json_str)
+
+    except Exception as exc:
+        logger.error(
+            "[ContentAgent] JSON parse error: %s\nRaw: %s",
+            exc,
+            text[:500]
+        )
+        return None  
+
+
+
+def _extract_visual_style(parsed: Any) -> str:
+    if isinstance(parsed, dict):
+        return parsed.get("visual_style_descriptor", "")
+    return ""
 
 
 def _extract_visual_style(parsed: Any) -> str:
@@ -472,6 +470,9 @@ async def run(state: ContentEngineState) -> dict:
         raise
 
     visual_style_descriptor = _extract_visual_style(parsed)
+    content_category = ""
+    if isinstance(parsed, dict):
+        content_category = parsed.get("content_category", "")
 
     # Normalise → flat list
     if isinstance(parsed, dict):
@@ -524,5 +525,6 @@ async def run(state: ContentEngineState) -> dict:
     # whatever is already in state (passed in from runner via style_reference_image).
     if visual_style_descriptor and not state.get("visual_style_descriptor"):
         updates["visual_style_descriptor"] = visual_style_descriptor
-
+    if content_category and not state.get("content_category"):
+            updates["content_category"] = content_category
     return updates

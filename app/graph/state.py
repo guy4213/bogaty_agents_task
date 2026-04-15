@@ -41,3 +41,4 @@ class ContentEngineState(TypedDict):
     s3_manifest: Optional[dict]
     status: Literal["pending", "processing", "completed", "partial", "failed"]
     errors: list[str]
+    content_category: str

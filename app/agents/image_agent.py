@@ -21,14 +21,17 @@ ASPECT_RATIOS = {
 
 DEFAULT_ASPECT = "1:1"
 
-
 def _build_image_prompt(state: ContentEngineState, is_thumbnail: bool = False) -> str:
     desc = state["description"]
     platform = state["platform"]
     lang = state["language"]
+    
+    # שליפת הקטגוריה שה-Content Agent הגדיר
+    category = state.get("content_category", "general").lower()
 
+    # גם כאן הורדתי את ה-"food photography aesthetic" מה-Instagram כדי שיהיה גנרי
     platform_style = {
-        "instagram": "warm cinematic lighting, shallow depth of field, food photography aesthetic, magazine quality",
+        "instagram": "warm cinematic lighting, shallow depth of field, high-end editorial aesthetic, magazine quality",
         "tiktok":    "vibrant, high-contrast, mobile-optimized, dynamic composition",
         "twitter":   "clean, editorial, wide shot, professional photography",
         "facebook":  "warm, inviting, lifestyle photography",
@@ -37,13 +40,20 @@ def _build_image_prompt(state: ContentEngineState, is_thumbnail: bool = False) -
 
     thumbnail_note = " This is a video thumbnail — visually compelling, click-worthy." if is_thumbnail else ""
     lang_note = " No text overlays." if lang == "en" else ""
+    
+    # התאמה דינמית של הפרומפט לתמונה רגילה (פוסט) לפי הקטגוריה
+    if category == "food":
+        prefix = "Photorealistic food photography:"
+        suffix = "appetizing presentation."
+    else:
+        prefix = f"Photorealistic {category} photography:"
+        suffix = "striking presentation."
 
     return (
-        f"Photorealistic food photography: {desc}. "
+        f"{prefix} {desc}. "
         f"Style: {platform_style}.{thumbnail_note}{lang_note} "
-        f"Ultra high quality, 8K, professional studio lighting, appetizing presentation."
+        f"Ultra high quality, 8K, professional studio lighting, {suffix}"
     )
-
 async def run(state: ContentEngineState) -> dict:
     task_id      = state["task_id"]
     item_index   = state["item_index"]
@@ -129,40 +139,11 @@ async def run(state: ContentEngineState) -> dict:
         updates["style_reference_image"] = s3_key
         logger.info("[%s] ImageAgent: style reference anchor set -> %s", task_id, s3_key)
 
-    # ── Food Reference Image (ללא אנשים) — לשימוש כ-style anchor בסצנה 4 ──
-    if is_thumbnail and not state.get("food_reference_image"):
-        try:
-            food_prompt = (
-                f"Photorealistic food photography: {desc}. "
-                f"The finished dish beautifully plated on a white ceramic bowl. "
-                f"NO people, NO hands, NO humans — food only. "
-                f"Garnished with fresh herbs. "
-                f"Style: {visual_style_descriptor}. "
-                f"9:16 vertical format. Cinematic food photography. "
-                f"Ultra high quality, professional studio lighting."
-            )
-            food_image_bytes = await generate_image(
-                prompt=food_prompt,
-                aspect_ratio="9:16",
-                style_reference_bytes=None,          # ← ללא reference כדי למנוע חסימה
-                visual_style_descriptor=visual_style_descriptor,
-            )
-            food_key = asset_key(task_id, platform, content_type, item_index, "food_reference.png")
-            await upload_bytes(food_key, food_image_bytes, content_type="image/png")
-            updates["food_reference_image"] = food_key
-            logger.info("[%s] ImageAgent: food reference image -> %s", task_id, food_key)
-        except Exception as exc:
-            logger.warning(
-                "[%s] ImageAgent: food reference image failed (%s) — continuing without",
-                task_id, exc,
-            )
-
     logger.info(
         "[%s] ImageAgent: item_%d uploaded -> %s (used_reference=%s)",
         task_id, item_index, s3_key, style_reference_bytes is not None,
     )
     return updates
-
 
 
 
