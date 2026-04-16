@@ -83,6 +83,16 @@ app = FastAPI(
 
 
 # ---------------------------------------------------------------------------
+# Input validation limits — based on API rate limits and system capacity
+# ---------------------------------------------------------------------------
+MAX_QUANTITY: dict[str, int] = {  # PARALLEL
+    "comment": 200,   # Single Claude batch call — high capacity  # PARALLEL
+    "post":    50,    # Claude + Imagen per item  # PARALLEL
+    "story":   50,    # Claude + Imagen per item  # PARALLEL
+    "reels":   50,    # Claude + Imagen + 4×Veo per item  # PARALLEL
+}  # PARALLEL
+
+# ---------------------------------------------------------------------------
 # POST /generate
 # ---------------------------------------------------------------------------
 
@@ -93,6 +103,23 @@ async def generate(request: GenerateRequest, background_tasks: BackgroundTasks):
     Returns immediately with a task_id; processing runs in the background.
     Poll /tasks/{task_id} for status and results.
     """
+    # Validate quantity against system limits
+    max_qty = MAX_QUANTITY.get(request.content_type.value, 50)  # PARALLEL
+    if request.quantity < 1:  # PARALLEL
+        raise HTTPException(  # PARALLEL
+            status_code=422,  # PARALLEL
+            detail=f"quantity must be at least 1."  # PARALLEL
+        )  # PARALLEL
+    if request.quantity > max_qty:  # PARALLEL
+        raise HTTPException(  # PARALLEL
+            status_code=422,  # PARALLEL
+            detail=(  # PARALLEL
+                f"quantity={request.quantity} exceeds maximum for "  # PARALLEL
+                f"content_type='{request.content_type.value}' (max={max_qty}). "  # PARALLEL
+                f"Submit multiple requests to generate more."  # PARALLEL
+            )  # PARALLEL
+        )  # PARALLEL
+
     record = await task_store.create(
         platform=request.platform.value,
         content_type=request.content_type.value,
