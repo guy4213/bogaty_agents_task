@@ -83,13 +83,13 @@ app = FastAPI(
 
 
 # ---------------------------------------------------------------------------
-# Input validation limits — based on API rate limits and system capacity
+# Input validation — max quantity per content_type based on API capacity
 # ---------------------------------------------------------------------------
-MAX_QUANTITY: dict[str, int] = {  # PARALLEL
-    "comment": 200,   # Single Claude batch call — high capacity  # PARALLEL
-    "post":    50,    # Claude + Imagen per item  # PARALLEL
-    "story":   50,    # Claude + Imagen per item  # PARALLEL
-    "reels":   50,    # Claude + Imagen + 4×Veo per item  # PARALLEL
+_MAX_QUANTITY: dict[str, int] = {  # PARALLEL
+    "comment": 200,  # PARALLEL
+    "post":    50,   # PARALLEL
+    "story":   50,   # PARALLEL
+    "reels":   50,   # PARALLEL
 }  # PARALLEL
 
 # ---------------------------------------------------------------------------
@@ -104,20 +104,17 @@ async def generate(request: GenerateRequest, background_tasks: BackgroundTasks):
     Poll /tasks/{task_id} for status and results.
     """
     # Validate quantity against system limits
-    max_qty = MAX_QUANTITY.get(request.content_type.value, 50)  # PARALLEL
+    max_qty = _MAX_QUANTITY.get(request.content_type.value, 50)  # PARALLEL
     if request.quantity < 1:  # PARALLEL
-        raise HTTPException(  # PARALLEL
-            status_code=422,  # PARALLEL
-            detail=f"quantity must be at least 1."  # PARALLEL
-        )  # PARALLEL
+        raise HTTPException(status_code=422, detail="quantity must be at least 1.")  # PARALLEL
     if request.quantity > max_qty:  # PARALLEL
         raise HTTPException(  # PARALLEL
             status_code=422,  # PARALLEL
             detail=(  # PARALLEL
-                f"quantity={request.quantity} exceeds maximum for "  # PARALLEL
+                f"quantity={request.quantity} exceeds the maximum for "  # PARALLEL
                 f"content_type='{request.content_type.value}' (max={max_qty}). "  # PARALLEL
-                f"Submit multiple requests to generate more."  # PARALLEL
-            )  # PARALLEL
+                f"Submit multiple requests to generate larger batches."  # PARALLEL
+            ),  # PARALLEL
         )  # PARALLEL
 
     record = await task_store.create(
