@@ -61,7 +61,9 @@ def _build_initial_state(
         description=description,
         pipeline_type=pipeline_type.value,
         style_reference_image=style_reference_image,
-        visual_style_descriptor="",   
+        visual_style_descriptor="",
+        content_category="",          # BUGFIX
+        food_reference_image=None,    # BUGFIX
         generated_texts=[],
         generated_images=[],
         generated_videos=[],
@@ -88,13 +90,15 @@ async def _generate_style_reference(  # PARALLEL
 ) -> str | None:  # PARALLEL
     """
     Generates ONE style reference image before parallel items launch.
-    Used by both text_image and full_video pipelines.
+    Runs Content Agent first to get visual_style_descriptor + content_category,
+    then Image Agent with full context — so the reference image matches the actual content.
     Returns the S3 key of the generated image, or None on failure.
     """  # PARALLEL
+    from app.agents.content_agent import run as content_agent_run  # BUGFIX
     from app.agents.image_agent import run as image_agent_run  # PARALLEL
     from app.graph.state import ContentEngineState  # PARALLEL
 
-    logger.info("[%s] Generating style reference image (anchor run)", task_id)  # PARALLEL
+    logger.info("[%s] Generating style reference — content phase", task_id)  # BUGFIX
     try:  # PARALLEL
         anchor_state = ContentEngineState(  # PARALLEL
             task_id=task_id,  # PARALLEL
@@ -123,6 +127,16 @@ async def _generate_style_reference(  # PARALLEL
             errors=[],  # PARALLEL
             food_reference_image=None,  # PARALLEL
         )  # PARALLEL
+        # Step 1: Content Agent → visual_style_descriptor + content_category + generated_texts  # BUGFIX
+        content_updates = await content_agent_run(anchor_state)  # BUGFIX
+        anchor_state = {**anchor_state, **content_updates}  # BUGFIX
+        logger.info(  # BUGFIX
+            "[%s] Style reference — content done, category=%s style=%s",  # BUGFIX
+            task_id,  # BUGFIX
+            anchor_state.get("content_category", ""),  # BUGFIX
+            anchor_state.get("visual_style_descriptor", "")[:60],  # BUGFIX
+        )  # BUGFIX
+        # Step 2: Image Agent with full context  # BUGFIX
         updates = await image_agent_run(anchor_state)  # PARALLEL
         style_ref = updates.get("style_reference_image")  # PARALLEL
         if style_ref:  # PARALLEL
