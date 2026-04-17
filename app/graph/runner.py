@@ -19,12 +19,13 @@ logger = logging.getLogger(__name__)
 #   text_image: Imagen ~20 RPM      → 18
 #   full_video: Veo 10 concurrent   → 8
 # ---------------------------------------------------------------------------
-import asyncio as _asyncio  # PARALLEL
+import asyncio as _asyncio
 
-_SEMAPHORES: dict[str, _asyncio.Semaphore] = {  # PARALLEL
-    "text_only":  _asyncio.Semaphore(48),  # PARALLEL
-    "text_image": _asyncio.Semaphore(18),  # PARALLEL
-    "full_video": _asyncio.Semaphore(8),   # PARALLEL
+# Limits based on API rate limits: Claude 50 RPM → 48, Imagen ~20 RPM → 18, Veo 10 concurrent → 8
+_SEMAPHORES: dict[str, _asyncio.Semaphore] = {
+    "text_only":  _asyncio.Semaphore(48),
+    "text_image": _asyncio.Semaphore(18),
+    "full_video": _asyncio.Semaphore(8),
 }
 
 PIPELINE_MAP = {
@@ -49,7 +50,7 @@ def _build_initial_state(
     description: str,
     pipeline_type: PipelineType,
     style_reference_image: str | None,
-    derived_category: str = "",  # FIX 5: propagate anchor content_category into per-item state
+    derived_category: str = "",
 ) -> ContentEngineState:
     return ContentEngineState(
         task_id=task_id,
@@ -63,8 +64,8 @@ def _build_initial_state(
         pipeline_type=pipeline_type.value,
         style_reference_image=style_reference_image,
         visual_style_descriptor="",
-        content_category=derived_category,  # FIX 5
-        food_reference_image=None,    # BUGFIX
+        content_category=derived_category,
+        food_reference_image=None,
         generated_texts=[],
         generated_images=[],
         generated_videos=[],
@@ -81,72 +82,73 @@ def _build_initial_state(
 
 
 
-async def _generate_style_reference(  # PARALLEL
-    task_id: str,  # PARALLEL
-    platform: str,  # PARALLEL
-    content_type: str,  # PARALLEL
-    language: str,  # PARALLEL
-    description: str,  # PARALLEL
-    pipeline_type: PipelineType,  # PARALLEL
-) -> tuple[str | None, str]:  # FIX 5: also returns derived_category
+async def _generate_style_reference(
+    task_id: str,
+    platform: str,
+    content_type: str,
+    language: str,
+    description: str,
+    pipeline_type: PipelineType,
+) -> tuple[str | None, str]:
     """
     Generates ONE style reference image before parallel items launch.
-    Runs Content Agent first to get visual_style_descriptor + content_category,
-    then Image Agent with full context — so the reference image matches the actual content.
+    Uses a lightweight Claude call (max_tokens=200) to get visual_style_descriptor
+    and content_category, then passes those directly to Image Agent.
     Returns (style_ref_s3_key, content_category) — both may be empty on failure.
-    """  # PARALLEL
-    from app.agents.content_agent import run as content_agent_run  # BUGFIX
-    from app.agents.image_agent import run as image_agent_run  # PARALLEL
-    from app.graph.state import ContentEngineState  # PARALLEL
+    """
+    from app.agents.content_agent import generate_style_fields
+    from app.agents.image_agent import run as image_agent_run
 
-    logger.info("[%s] Generating style reference — content phase", task_id)  # BUGFIX
-    try:  # PARALLEL
-        anchor_state = ContentEngineState(  # PARALLEL
-            task_id=task_id,  # PARALLEL
-            item_index=0,  # PARALLEL
-            thread_id=f"{task_id}__anchor",  # PARALLEL
-            platform=platform,  # PARALLEL
-            content_type=content_type,  # PARALLEL
-            language=language,  # PARALLEL
-            quantity=1,  # PARALLEL
-            description=description,  # PARALLEL
-            pipeline_type=pipeline_type.value,  # PARALLEL
-            style_reference_image=None,  # PARALLEL
-            visual_style_descriptor="",  # PARALLEL
-            content_category="",  # PARALLEL
-            generated_texts=[],  # PARALLEL
-            generated_images=[],  # PARALLEL
-            generated_videos=[],  # PARALLEL
-            current_video_ref=None,  # PARALLEL
-            completed_extends=0,  # PARALLEL
-            all_video_refs=[],  # PARALLEL
-            validation_results=[],  # PARALLEL
-            retry_count=0,  # PARALLEL
-            cost_accumulated=0.0,  # PARALLEL
-            s3_manifest=None,  # PARALLEL
-            status="pending",  # PARALLEL
-            errors=[],  # PARALLEL
-            food_reference_image=None,  # PARALLEL
-        )  # PARALLEL
-        # Step 1: Content Agent → visual_style_descriptor + content_category + generated_texts  # BUGFIX
-        content_updates = await content_agent_run(anchor_state)  # BUGFIX
-        anchor_state = {**anchor_state, **content_updates}  # BUGFIX
-        logger.info(  # BUGFIX
-            "[%s] Style reference — content done, category=%s style=%s",  # BUGFIX
-            task_id,  # BUGFIX
-            anchor_state.get("content_category", ""),  # BUGFIX
-            anchor_state.get("visual_style_descriptor", "")[:60],  # BUGFIX
-        )  # BUGFIX
-        # Step 2: Image Agent with full context  # BUGFIX
-        derived_category = anchor_state.get("content_category", "")  # FIX 5
-        updates   = await image_agent_run(anchor_state)  # PARALLEL
-        style_ref = updates.get("style_reference_image")  # PARALLEL
-        if style_ref:  # PARALLEL
-            logger.info("[%s] Style reference image ready: %s", task_id, style_ref)  # PARALLEL
-        return style_ref, derived_category  # FIX 5
-    except Exception as exc:  # PARALLEL
-        logger.warning("[%s] Style reference generation failed (%s) — proceeding without", task_id, exc)  # PARALLEL
-        return None, ""  # FIX 5
+    logger.info("[%s] Generating style reference", task_id)
+    try:
+        visual_style_descriptor, derived_category = await generate_style_fields(
+            description=description,
+            content_type=content_type,
+            platform=platform,
+            language=language,
+        )
+        logger.info(
+            "[%s] Style fields: category=%s style=%s",
+            task_id, derived_category, visual_style_descriptor[:60],
+        )
+
+        anchor_state = ContentEngineState(
+            task_id=task_id,
+            item_index=0,
+            thread_id=f"{task_id}__anchor",
+            platform=platform,
+            content_type=content_type,
+            language=language,
+            quantity=1,
+            description=description,
+            pipeline_type=pipeline_type.value,
+            style_reference_image=None,
+            visual_style_descriptor=visual_style_descriptor,
+            content_category=derived_category,
+            food_reference_image=None,
+            generated_texts=[],
+            generated_images=[],
+            generated_videos=[],
+            current_video_ref=None,
+            completed_extends=0,
+            all_video_refs=[],
+            validation_results=[],
+            retry_count=0,
+            cost_accumulated=0.0,
+            s3_manifest=None,
+            status="pending",
+            errors=[],
+        )
+
+        updates   = await image_agent_run(anchor_state)
+        style_ref = updates.get("style_reference_image")
+        if style_ref:
+            logger.info("[%s] Style reference image ready: %s", task_id, style_ref)
+        return style_ref, derived_category
+
+    except Exception as exc:
+        logger.warning("[%s] Style reference failed (%s) — proceeding without", task_id, exc)
+        return None, ""
 
 async def _run_single_item(
     task_id: str,
@@ -215,171 +217,179 @@ async def run_batch(
     failed_items: list[FailedItem] = []
     all_assets:   list[AssetRecord] = []
     style_reference_image: str | None = None
-    derived_category: str = ""  # FIX 5
+    derived_category: str = ""
     total_cost = 0.0
     total_checkpoint_savings = 0.0
-    _completed_count = 0  # FIX 3
+    _completed_count = 0
+    _texts_delivered = 0  # actual comment count for text_only; fixes items_delivered metric
 
-    items_to_run = 1 if pipeline_type == PipelineType.text_only else quantity  # PARALLEL
-    semaphore    = _SEMAPHORES[pipeline_type.value]  # PARALLEL
-    _lock        = _asyncio.Lock()  # PARALLEL
+    items_to_run = 1 if pipeline_type == PipelineType.text_only else quantity
+    semaphore    = _SEMAPHORES[pipeline_type.value]
+    _lock        = _asyncio.Lock()
 
     # ------------------------------------------------------------------
     # Generate ONE style_reference_image upfront for text_image + full_video
     # ------------------------------------------------------------------
-    if pipeline_type in (PipelineType.text_image, PipelineType.full_video) and items_to_run > 0:  # PARALLEL
-        style_reference_image, derived_category = await _generate_style_reference(  # FIX 5
-            task_id=task_id,  # PARALLEL
-            platform=platform,  # PARALLEL
-            content_type=content_type,  # PARALLEL
-            language=language,  # PARALLEL
-            description=description,  # PARALLEL
-            pipeline_type=pipeline_type,  # PARALLEL
-        )  # PARALLEL
+    if pipeline_type in (PipelineType.text_image, PipelineType.full_video) and items_to_run > 0:
+        style_reference_image, derived_category = await _generate_style_reference(
+            task_id=task_id,
+            platform=platform,
+            content_type=content_type,
+            language=language,
+            description=description,
+            pipeline_type=pipeline_type,
+        )
 
     # ------------------------------------------------------------------
     # Per-item coroutine — handles execution + Tier 3 checkpoint recovery
     # ------------------------------------------------------------------
-    async def _process_item(i: int) -> None:  # PARALLEL
-        from app.agents.video_agent import _PartialVideoError  # PARALLEL
+    async def _process_item(i: int) -> None:
+        from app.agents.video_agent import _PartialVideoError
 
-        async def _run() -> dict:  # PARALLEL
-            async with semaphore:  # PARALLEL
-                return await _run_single_item(  # PARALLEL
-                    task_id=task_id,  # PARALLEL
-                    item_index=i,  # PARALLEL
-                    platform=platform,  # PARALLEL
-                    content_type=content_type,  # PARALLEL
-                    language=language,  # PARALLEL
-                    quantity=quantity,  # PARALLEL
-                    description=description,  # PARALLEL
-                    pipeline_type=pipeline_type,  # PARALLEL
-                    style_reference_image=style_reference_image,  # PARALLEL
-                )  # PARALLEL
+        async def _run() -> dict:
+            async with semaphore:
+                return await _run_single_item(
+                    task_id=task_id,
+                    item_index=i,
+                    platform=platform,
+                    content_type=content_type,
+                    language=language,
+                    quantity=quantity,
+                    description=description,
+                    pipeline_type=pipeline_type,
+                    style_reference_image=style_reference_image,
+                )
 
-        try:  # PARALLEL
-            result = await _run()  # PARALLEL
+        try:
+            result = await _run()
 
-        except Exception as exc:  # PARALLEL
+        except Exception as exc:
             # Tier 3 checkpoint — partial video recovery
-            if isinstance(exc, _PartialVideoError) and _is_retryable(exc):  # PARALLEL
-                logger.info(  # PARALLEL
+            if isinstance(exc, _PartialVideoError) and _is_retryable(exc):
+                logger.info(
                     "[%s] item_%d _PartialVideoError — Tier 3 retry from extend=%d refs=%d",
                     task_id, i, exc.completed_extends, len(exc.all_video_refs),
-                )  # PARALLEL
-                try:  # PARALLEL
-                    partial_state = _build_initial_state(  # PARALLEL
-                        task_id=task_id,  # PARALLEL
-                        item_index=i,  # PARALLEL
-                        platform=platform,  # PARALLEL
-                        content_type=content_type,  # PARALLEL
-                        language=language,  # PARALLEL
-                        quantity=quantity,  # PARALLEL
-                        description=description,  # PARALLEL
-                        pipeline_type=pipeline_type,  # PARALLEL
-                        style_reference_image=style_reference_image,  # PARALLEL
-                        derived_category=derived_category,  # FIX 5
-                    )  # PARALLEL
-                    partial_state["current_video_ref"] = exc.current_video_ref  # PARALLEL
-                    partial_state["completed_extends"] = exc.completed_extends  # PARALLEL
-                    partial_state["all_video_refs"]    = exc.all_video_refs  # PARALLEL
-                    partial_state["generated_texts"]   = exc.generated_texts  # PARALLEL
+                )
+                try:
+                    partial_state = _build_initial_state(
+                        task_id=task_id,
+                        item_index=i,
+                        platform=platform,
+                        content_type=content_type,
+                        language=language,
+                        quantity=quantity,
+                        description=description,
+                        pipeline_type=pipeline_type,
+                        style_reference_image=style_reference_image,
+                        derived_category=derived_category,
+                    )
+                    partial_state["current_video_ref"] = exc.current_video_ref
+                    partial_state["completed_extends"] = exc.completed_extends
+                    partial_state["all_video_refs"]    = exc.all_video_refs
+                    partial_state["generated_texts"]   = exc.generated_texts
 
-                    async with semaphore:  # PARALLEL
-                        result = await _run_single_item(  # PARALLEL
-                            task_id=task_id,  # PARALLEL
-                            item_index=i,  # PARALLEL
-                            platform=platform,  # PARALLEL
-                            content_type=content_type,  # PARALLEL
-                            language=language,  # PARALLEL
-                            quantity=quantity,  # PARALLEL
-                            description=description,  # PARALLEL
-                            pipeline_type=pipeline_type,  # PARALLEL
-                            style_reference_image=style_reference_image,  # PARALLEL
-                            override_state=partial_state,  # PARALLEL
-                        )  # PARALLEL
+                    async with semaphore:
+                        result = await _run_single_item(
+                            task_id=task_id,
+                            item_index=i,
+                            platform=platform,
+                            content_type=content_type,
+                            language=language,
+                            quantity=quantity,
+                            description=description,
+                            pipeline_type=pipeline_type,
+                            style_reference_image=style_reference_image,
+                            override_state=partial_state,
+                        )
 
-                    checkpoint_saving = exc.completed_extends * 0.20  # PARALLEL
-                    async with _lock:  # PARALLEL
-                        nonlocal total_checkpoint_savings  # PARALLEL
-                        total_checkpoint_savings += checkpoint_saving  # PARALLEL
-                    logger.info("[%s] item_%d Tier 3 retry SUCCEEDED", task_id, i)  # PARALLEL
+                    checkpoint_saving = exc.completed_extends * 0.20
+                    async with _lock:
+                        nonlocal total_checkpoint_savings
+                        total_checkpoint_savings += checkpoint_saving
+                    logger.info("[%s] item_%d Tier 3 retry SUCCEEDED", task_id, i)
 
-                except Exception as retry_exc:  # PARALLEL
-                    logger.error("[%s] item_%d Tier 3 retry FAILED: %s", task_id, i, retry_exc, exc_info=True)  # PARALLEL
-                    async with _lock:  # PARALLEL
-                        failed_items.append(FailedItem(  # PARALLEL
-                            index=i,  # PARALLEL
-                            stage=_infer_failure_stage(retry_exc),  # PARALLEL
-                            error=str(retry_exc),  # PARALLEL
-                            retryable=_is_retryable(retry_exc),  # PARALLEL
-                        ))  # PARALLEL
-                        await task_store.add_error(task_id, f"item_{i}: {retry_exc}")  # PARALLEL
-                    return  # PARALLEL
+                except Exception as retry_exc:
+                    logger.error("[%s] item_%d Tier 3 retry FAILED: %s", task_id, i, retry_exc, exc_info=True)
+                    async with _lock:
+                        failed_items.append(FailedItem(
+                            index=i,
+                            stage=_infer_failure_stage(retry_exc),
+                            error=str(retry_exc),
+                            retryable=_is_retryable(retry_exc),
+                        ))
+                        await task_store.add_error(task_id, f"item_{i}: {retry_exc}")
+                    return
 
-            else:  # PARALLEL
-                logger.error("[%s] item_%d FAILED: %s", task_id, i, exc, exc_info=True)  # PARALLEL
-                async with _lock:  # PARALLEL
-                    failed_items.append(FailedItem(  # PARALLEL
-                        index=i,  # PARALLEL
-                        stage=_infer_failure_stage(exc),  # PARALLEL
-                        error=str(exc),  # PARALLEL
-                        retryable=_is_retryable(exc),  # PARALLEL
-                    ))  # PARALLEL
-                    await task_store.add_error(task_id, f"item_{i}: {exc}")  # PARALLEL
-                return  # PARALLEL
+            else:
+                logger.error("[%s] item_%d FAILED: %s", task_id, i, exc, exc_info=True)
+                async with _lock:
+                    failed_items.append(FailedItem(
+                        index=i,
+                        stage=_infer_failure_stage(exc),
+                        error=str(exc),
+                        retryable=_is_retryable(exc),
+                    ))
+                    await task_store.add_error(task_id, f"item_{i}: {exc}")
+                return
 
         # Success — collect results under lock
-        async with _lock:  # PARALLEL
-            nonlocal total_cost, _completed_count  # FIX 2: removed no-op style_reference_image; FIX 3: added _completed_count
-            item_cost = result.get("cost_accumulated", 0.0)  # PARALLEL
-            total_cost += item_cost  # PARALLEL
-            _completed_count += 1  # FIX 3
-            await task_store.increment_cost(task_id, item_cost)  # PARALLEL
+        async with _lock:
+            nonlocal total_cost, _completed_count, _texts_delivered
+            item_cost = result.get("cost_accumulated", 0.0)
+            total_cost += item_cost
+            _completed_count += 1
+            if content_type == "comment":
+                _texts_delivered += len(result.get("generated_texts", []))
+            await task_store.increment_cost(task_id, item_cost)
 
-            for img in result.get("generated_images", []):  # PARALLEL
-                all_assets.append(AssetRecord(  # PARALLEL
-                    item_index=i,  # PARALLEL
-                    asset_type="image",  # PARALLEL
-                    s3_key=img.get("s3_key", ""),  # PARALLEL
-                    file_format=img.get("format", "png"),  # PARALLEL
-                    validation_passed=_item_passed_validation(result, i),  # PARALLEL
-                    generation_cost_usd=item_cost,  # PARALLEL
-                ))  # PARALLEL
-            for vid in result.get("generated_videos", []):  # PARALLEL
-                all_assets.append(AssetRecord(  # PARALLEL
-                    item_index=i,  # PARALLEL
-                    asset_type="video",  # PARALLEL
-                    s3_key=vid.get("s3_key", ""),  # PARALLEL
-                    file_format="mp4",  # PARALLEL
-                    validation_passed=_item_passed_validation(result, i),  # PARALLEL
-                    generation_cost_usd=item_cost,  # PARALLEL
-                ))  # PARALLEL
-            if result.get("generated_texts"):  # PARALLEL
-                root = "comments" if content_type == "comment" else ("posts" if content_type in ("post", "story") else "videos")  # PARALLEL
-                all_assets.append(AssetRecord(  # PARALLEL
-                    item_index=i,  # PARALLEL
-                    asset_type="text",  # PARALLEL
-                    s3_key=f"{root}/{task_id}/{platform}/item_{i}/content.json",  # PARALLEL
-                    file_format="json",  # PARALLEL
-                    validation_passed=_item_passed_validation(result, i),  # PARALLEL
-                    generation_cost_usd=item_cost,  # PARALLEL
-                ))  # PARALLEL
-            await task_store.update(task_id, items_completed=_completed_count)  # FIX 3
+            for img in result.get("generated_images", []):
+                all_assets.append(AssetRecord(
+                    item_index=i,
+                    asset_type="image",
+                    s3_key=img.get("s3_key", ""),
+                    file_format=img.get("format", "png"),
+                    validation_passed=_item_passed_validation(result, i),
+                    generation_cost_usd=item_cost,
+                ))
+            for vid in result.get("generated_videos", []):
+                all_assets.append(AssetRecord(
+                    item_index=i,
+                    asset_type="video",
+                    s3_key=vid.get("s3_key", ""),
+                    file_format="mp4",
+                    validation_passed=_item_passed_validation(result, i),
+                    generation_cost_usd=item_cost,
+                ))
+            if result.get("generated_texts"):
+                root = "comments" if content_type == "comment" else ("posts" if content_type in ("post", "story") else "videos")
+                all_assets.append(AssetRecord(
+                    item_index=i,
+                    asset_type="text",
+                    s3_key=f"{root}/{task_id}/{platform}/item_{i}/content.json",
+                    file_format="json",
+                    validation_passed=_item_passed_validation(result, i),
+                    generation_cost_usd=item_cost,
+                ))
+            await task_store.update(task_id, items_completed=_completed_count)
 
     # ------------------------------------------------------------------
     # Launch all items in parallel
     # ------------------------------------------------------------------
-    logger.info("[%s] Launching %d items in parallel (pipeline=%s semaphore=%d)",  # PARALLEL
-                task_id, items_to_run, pipeline_type.value, semaphore._value)  # PARALLEL
-    await _asyncio.gather(*[_process_item(i) for i in range(items_to_run)])  # PARALLEL
+    logger.info("[%s] Launching %d items in parallel (pipeline=%s semaphore=%d)",
+                task_id, items_to_run, pipeline_type.value, semaphore._value)
+    await _asyncio.gather(*[_process_item(i) for i in range(items_to_run)])
 
     # ------------------------------------------------------------------
     # manifest + final status
     # ------------------------------------------------------------------
-    items_delivered = quantity - len(failed_items)
+    if pipeline_type == PipelineType.text_only:
+        items_delivered = _texts_delivered
+        items_failed    = quantity - _texts_delivered
+    else:
+        items_delivered = quantity - len(failed_items)
+        items_failed    = len(failed_items)
     final_status = (
-        TaskStatus.completed if not failed_items
+        TaskStatus.completed if items_failed == 0
         else TaskStatus.partial if items_delivered > 0
         else TaskStatus.failed
     )
@@ -401,7 +411,7 @@ async def run_batch(
         task_id,
         status=final_status,
         items_completed=items_delivered,
-        items_failed=len(failed_items),
+        items_failed=items_failed,
         total_cost_usd=round(total_cost, 4),
         cost_saved_by_checkpoint=round(total_checkpoint_savings, 4),
         manifest_s3_key=manifest_key,
@@ -410,7 +420,7 @@ async def run_batch(
 
     logger.info(
         "[%s] Batch complete: delivered=%d failed=%d cost=$%.4f status=%s",
-        task_id, items_delivered, len(failed_items), total_cost, final_status,
+        task_id, items_delivered, items_failed, total_cost, final_status,
     )
 
 def _item_passed_validation(result: dict, item_index: int) -> bool:

@@ -48,7 +48,7 @@ def _build_initial_prompt(scene: dict, lang: str, visual_style: str = "", canoni
 def _build_extend_prompt(
     scene: dict, lang: str, visual_style: str = "",
     first_scene_visual: str = "", canonical_subject: str = "",
-    content_category: str = ""  # BUGFIX
+    content_category: str = "",
 ) -> str:
     visual      = scene.get("visual_description", "")
     entry_state = scene.get("entry_state", "")
@@ -56,7 +56,7 @@ def _build_extend_prompt(
 
     style_anchor = f" Maintain this exact visual style: {visual_style}." if visual_style else ""
 
-    is_open = content_category not in ("food", "fitness", "technology", "")  # BUGFIX
+    is_open = content_category not in ("food", "fitness", "technology", "")
     subject_lock = (
         f" LOCKED SUBJECT: [{canonical_subject}]."
         f" The core subject and theme is {canonical_subject}."
@@ -85,7 +85,7 @@ def _build_extend_prompt(
     no_repeat = (
         f" STRICTLY FORBIDDEN: Do NOT repeat any action that already occurred"
         f" in a previous scene."
-        f" Any actions involving {canonical_subject} that occurred in previous scenes have already happened and must NOT be shown again."  # BUGFIX
+        f" Any actions involving {canonical_subject} that occurred in previous scenes have already happened and must NOT be shown again."
         f" This scene continues AFTER all previous actions are fully complete."
     ) if canonical_subject else ""
 
@@ -100,7 +100,7 @@ def _build_extend_prompt(
     else:
         caption_instruction = " No text overlays."
 
-    # BUGFIX: OPEN journeys (travel, real estate) may change location
+    # Open journeys (travel, real estate) may change location between scenes
     is_open = content_category not in ("food", "fitness", "technology", "")
     location_instruction = (
         f" SAME location, SAME lighting as previous scene."
@@ -131,7 +131,7 @@ def _build_payoff_prompt(
     style_anchor = f" Maintain this exact visual style: {visual_style}." if visual_style else ""
 
     subject_lock = (
-        f" SUBJECT: [{canonical_subject}] — fully completed and presented in its final state."  # BUGFIX
+        f" SUBJECT: [{canonical_subject}] — fully completed and presented in its final state."
         f" ALL elements of {canonical_subject} are visible and complete."
     ) if canonical_subject else ""
 
@@ -314,7 +314,7 @@ async def run(state: ContentEngineState) -> dict:
             # ── סצנות 2-3: extend רגיל ──
             extend_prompt = _build_extend_prompt(
                 scene, lang, visual_style, first_scene_visual, canonical_subject,
-                content_category=state.get("content_category", ""),  # BUGFIX
+                content_category=state.get("content_category", ""),
             )
             logger.info(
                 "[%s] VideoAgent: extend %d/%d scene=%d caption_en='%s'",

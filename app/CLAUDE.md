@@ -92,3 +92,10 @@ Tasks are tracked in `task_store.py` (in-memory `asyncio.Lock`-protected dict). 
 - `GET /tasks` — list all (dev)
 - `GET /health` — service health + circuit breaker state
 - `GET /` — liveness
+
+## Rules
+- Don't explain what you're about to do, just do it
+- Don't summarize what you did after finishing
+- Ask clarifying questions before writing code
+- When editing code, show only the changed parts
+- Think step by step before implementing anything complex
