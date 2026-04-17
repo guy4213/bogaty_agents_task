@@ -47,7 +47,8 @@ def _build_initial_prompt(scene: dict, lang: str, visual_style: str = "", canoni
 
 def _build_extend_prompt(
     scene: dict, lang: str, visual_style: str = "",
-    first_scene_visual: str = "", canonical_subject: str = ""
+    first_scene_visual: str = "", canonical_subject: str = "",
+    content_category: str = ""  # BUGFIX
 ) -> str:
     visual      = scene.get("visual_description", "")
     entry_state = scene.get("entry_state", "")
@@ -55,14 +56,21 @@ def _build_extend_prompt(
 
     style_anchor = f" Maintain this exact visual style: {visual_style}." if visual_style else ""
 
+    is_open = content_category not in ("food", "fitness", "technology", "")  # BUGFIX
     subject_lock = (
         f" LOCKED SUBJECT: [{canonical_subject}]."
-        f" The ONLY subject in this scene is {canonical_subject}."
-        f" VISUAL LOCK: What appears in frame is EXCLUSIVELY {canonical_subject}."
-        f" ALL elements of {canonical_subject} MUST remain visible in frame at all times."
-        f" Do NOT remove, hide, or replace any component of {canonical_subject}."
-        f" FORBIDDEN: Do NOT substitute {canonical_subject} with anything else."
-        f" No variations. No new elements."
+        f" The core subject and theme is {canonical_subject}."
+        f" FORBIDDEN: Do NOT replace {canonical_subject} with a completely unrelated subject."
+        + (
+            # CLOSED: strict lock — no new elements
+            f" VISUAL LOCK: What appears in frame is EXCLUSIVELY {canonical_subject}."
+            f" ALL elements of {canonical_subject} MUST remain visible at all times."
+            f" No variations. No new elements."
+            if not is_open else
+            # OPEN: allow new logical locations but keep theme
+            f" New environments or locations are allowed IF they logically belong to the {content_category} journey."
+            f" FORBIDDEN: Do NOT introduce elements that are unrelated to {canonical_subject}."
+        )
     ) if canonical_subject else ""
 
     scene_anchor = (
@@ -92,6 +100,14 @@ def _build_extend_prompt(
     else:
         caption_instruction = " No text overlays."
 
+    # BUGFIX: OPEN journeys (travel, real estate) may change location
+    is_open = content_category not in ("food", "fitness", "technology", "")
+    location_instruction = (
+        f" SAME location, SAME lighting as previous scene."
+        if not is_open else
+        f" SAME visual style, color grade and lighting TEMPERATURE as previous scene."
+        f" Location may change if the narrative requires it."
+    )
     return (
         f"Continue seamlessly: {visual}.{style_anchor}{subject_lock}{scene_anchor}"
         f"{continuity}"
@@ -99,7 +115,7 @@ def _build_extend_prompt(
         f" Camera framing: medium shot with subject fully visible and centered."
         f" Leave breathing room around the subject — do NOT crop or cut off edges."
         f" Subject must be 100% in frame at all times."
-        f" SAME location, SAME lighting as previous scene."
+        f"{location_instruction}"
         f"{audio_instruction}"
         f"{caption_instruction} "
     )
@@ -297,7 +313,8 @@ async def run(state: ContentEngineState) -> dict:
         else:
             # ── סצנות 2-3: extend רגיל ──
             extend_prompt = _build_extend_prompt(
-                scene, lang, visual_style, first_scene_visual, canonical_subject
+                scene, lang, visual_style, first_scene_visual, canonical_subject,
+                content_category=state.get("content_category", ""),  # BUGFIX
             )
             logger.info(
                 "[%s] VideoAgent: extend %d/%d scene=%d caption_en='%s'",
