@@ -49,6 +49,7 @@ def _build_initial_state(
     description: str,
     pipeline_type: PipelineType,
     style_reference_image: str | None,
+    derived_category: str = "",  # FIX 5: propagate anchor content_category into per-item state
 ) -> ContentEngineState:
     return ContentEngineState(
         task_id=task_id,
@@ -62,7 +63,7 @@ def _build_initial_state(
         pipeline_type=pipeline_type.value,
         style_reference_image=style_reference_image,
         visual_style_descriptor="",
-        content_category="",          # BUGFIX
+        content_category=derived_category,  # FIX 5
         food_reference_image=None,    # BUGFIX
         generated_texts=[],
         generated_images=[],
@@ -87,12 +88,12 @@ async def _generate_style_reference(  # PARALLEL
     language: str,  # PARALLEL
     description: str,  # PARALLEL
     pipeline_type: PipelineType,  # PARALLEL
-) -> str | None:  # PARALLEL
+) -> tuple[str | None, str]:  # FIX 5: also returns derived_category
     """
     Generates ONE style reference image before parallel items launch.
     Runs Content Agent first to get visual_style_descriptor + content_category,
     then Image Agent with full context — so the reference image matches the actual content.
-    Returns the S3 key of the generated image, or None on failure.
+    Returns (style_ref_s3_key, content_category) — both may be empty on failure.
     """  # PARALLEL
     from app.agents.content_agent import run as content_agent_run  # BUGFIX
     from app.agents.image_agent import run as image_agent_run  # PARALLEL
@@ -137,14 +138,15 @@ async def _generate_style_reference(  # PARALLEL
             anchor_state.get("visual_style_descriptor", "")[:60],  # BUGFIX
         )  # BUGFIX
         # Step 2: Image Agent with full context  # BUGFIX
-        updates = await image_agent_run(anchor_state)  # PARALLEL
+        derived_category = anchor_state.get("content_category", "")  # FIX 5
+        updates   = await image_agent_run(anchor_state)  # PARALLEL
         style_ref = updates.get("style_reference_image")  # PARALLEL
         if style_ref:  # PARALLEL
             logger.info("[%s] Style reference image ready: %s", task_id, style_ref)  # PARALLEL
-        return style_ref  # PARALLEL
+        return style_ref, derived_category  # FIX 5
     except Exception as exc:  # PARALLEL
         logger.warning("[%s] Style reference generation failed (%s) — proceeding without", task_id, exc)  # PARALLEL
-        return None  # PARALLEL
+        return None, ""  # FIX 5
 
 async def _run_single_item(
     task_id: str,
@@ -213,8 +215,10 @@ async def run_batch(
     failed_items: list[FailedItem] = []
     all_assets:   list[AssetRecord] = []
     style_reference_image: str | None = None
+    derived_category: str = ""  # FIX 5
     total_cost = 0.0
     total_checkpoint_savings = 0.0
+    _completed_count = 0  # FIX 3
 
     items_to_run = 1 if pipeline_type == PipelineType.text_only else quantity  # PARALLEL
     semaphore    = _SEMAPHORES[pipeline_type.value]  # PARALLEL
@@ -224,7 +228,7 @@ async def run_batch(
     # Generate ONE style_reference_image upfront for text_image + full_video
     # ------------------------------------------------------------------
     if pipeline_type in (PipelineType.text_image, PipelineType.full_video) and items_to_run > 0:  # PARALLEL
-        style_reference_image = await _generate_style_reference(  # PARALLEL
+        style_reference_image, derived_category = await _generate_style_reference(  # FIX 5
             task_id=task_id,  # PARALLEL
             platform=platform,  # PARALLEL
             content_type=content_type,  # PARALLEL
@@ -274,6 +278,7 @@ async def run_batch(
                         description=description,  # PARALLEL
                         pipeline_type=pipeline_type,  # PARALLEL
                         style_reference_image=style_reference_image,  # PARALLEL
+                        derived_category=derived_category,  # FIX 5
                     )  # PARALLEL
                     partial_state["current_video_ref"] = exc.current_video_ref  # PARALLEL
                     partial_state["completed_extends"] = exc.completed_extends  # PARALLEL
@@ -326,9 +331,10 @@ async def run_batch(
 
         # Success — collect results under lock
         async with _lock:  # PARALLEL
-            nonlocal total_cost, style_reference_image  # PARALLEL
+            nonlocal total_cost, _completed_count  # FIX 2: removed no-op style_reference_image; FIX 3: added _completed_count
             item_cost = result.get("cost_accumulated", 0.0)  # PARALLEL
             total_cost += item_cost  # PARALLEL
+            _completed_count += 1  # FIX 3
             await task_store.increment_cost(task_id, item_cost)  # PARALLEL
 
             for img in result.get("generated_images", []):  # PARALLEL
@@ -359,7 +365,7 @@ async def run_batch(
                     validation_passed=_item_passed_validation(result, i),  # PARALLEL
                     generation_cost_usd=item_cost,  # PARALLEL
                 ))  # PARALLEL
-            await task_store.update(task_id, items_completed=items_to_run - len(failed_items))  # PARALLEL
+            await task_store.update(task_id, items_completed=_completed_count)  # FIX 3
 
     # ------------------------------------------------------------------
     # Launch all items in parallel
