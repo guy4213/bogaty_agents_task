@@ -105,9 +105,7 @@ async def generate(request: GenerateRequest, background_tasks: BackgroundTasks):
     """
     # Validate quantity against system limits
     max_qty = _MAX_QUANTITY.get(request.content_type.value, 50)  # PARALLEL
-    if request.quantity < 1:  # PARALLEL
-        raise HTTPException(status_code=422, detail="quantity must be at least 1.")  # PARALLEL
-    if request.quantity > max_qty:  # PARALLEL
+    if request.quantity > max_qty:  # PARALLEL  # FIX: removed dead ge=1 guard (Pydantic enforces it)
         raise HTTPException(  # PARALLEL
             status_code=422,  # PARALLEL
             detail=(  # PARALLEL
