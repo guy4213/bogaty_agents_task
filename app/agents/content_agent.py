@@ -25,14 +25,7 @@ ENTHUSIASM_LEVELS = [
     "warmly supportive", "humorously enthusiastic",
 ]
 
-CAPTION_LIMITS  = {
-    "instagram": 2200, "tiktok": 2200, "twitter": 280,
-    "telegram": 4096,  "facebook": 63206,
-}
-HASHTAG_LIMITS  = {
-    "instagram": 30, "tiktok": 30, "twitter": 5,
-    "telegram": 0,   "facebook": 10,
-}
+from app.constants import CAPTION_LIMITS, HASHTAG_LIMITS
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +188,7 @@ Rules:
 - ✅ GOOD (food): "thin spaghetti pasta with cherry tomatoes and garlic"
 - ✅ GOOD (travel): "sunset view from Santorini cliffside at golden hour"
 - ✅ GOOD (tech): "matte black mechanical keyboard with RGB lighting"
-- ❌ BAD: "pasta" / "food" / "the subject" / "the item"  # BUGFIX
+- ❌ BAD: "pasta" / "food" / "the subject" / "the item"
 
 ════════════════════════════════════════
 STEP 2 — DEFINE THE VISUAL STYLE
@@ -203,7 +196,7 @@ STEP 2 — DEFINE THE VISUAL STYLE
 Define a "visual_style_descriptor" — one sentence (max 25 words) locking:
   lighting temperature, color palette, camera style, depth of field, and mood.
 
-Examples by category — pick the style that fits your topic:  # BUGFIX
+Examples by category — pick the style that fits your topic:
 - (Food/Lifestyle): "Warm candlelit tones, rich ochre palette, shallow DOF close-ups, intimate mood."
 - (Real Estate): "Bright natural light, warm whites, wide-angle airy composition, aspirational mood."
 - (Travel): "Vibrant saturated colors, golden hour warmth, sweeping cinematic movement, adventurous mood."
@@ -376,13 +369,17 @@ def _extract_json(text: str) -> Any:
 
         json_str = cleaned[start:end + 1]
 
-        # ניסיון parse ראשון
         try:
             return json.loads(json_str)
         except json.JSONDecodeError:
-            # 🔥 ניסיון תיקון בסיסי
-            json_str = json_str.replace("\n", "").replace("\t", "")
-            return json.loads(json_str)
+            # LLMs sometimes emit literal control chars inside string values;
+            # strict=False accepts them without corrupting the content.
+            try:
+                return json.loads(json_str, strict=False)
+            except json.JSONDecodeError:
+                # Last resort: collapse whitespace outside strings (structural noise).
+                collapsed = re.sub(r"\s+", " ", json_str)
+                return json.loads(collapsed)
 
     except Exception as exc:
         logger.error(
@@ -390,14 +387,52 @@ def _extract_json(text: str) -> Any:
             exc,
             text[:500]
         )
-        raise json.JSONDecodeError(str(exc), text, 0)  # BUGFIX
+        raise json.JSONDecodeError(str(exc), text, 0)
 
 
 
-def _extract_visual_style(parsed: Any) -> str:  # BUGFIX
+def _extract_visual_style(parsed: Any) -> str:
     if isinstance(parsed, dict):
         return parsed.get("visual_style_descriptor", "")
     return ""
+
+
+async def generate_style_fields(
+    description: str,
+    content_type: str,
+    platform: str,
+    language: str,
+) -> tuple[str, str]:
+    """Lightweight call — returns (visual_style_descriptor, content_category) only."""
+    lang_hint = "Hebrew" if language == "he" else "English"
+    prompt = f"""Analyze this content brief and return visual style information only.
+
+TOPIC: "{description}"
+PLATFORM: {platform}
+CONTENT TYPE: {content_type}
+LANGUAGE: {lang_hint}
+
+Return ONLY a valid JSON object:
+{{
+  "visual_style_descriptor": "<one sentence max 25 words: lighting temperature, color palette, camera angle, depth of field, mood>",
+  "content_category": "<1-2 words: if food/cooking/baking/recipe related use exactly 'food', otherwise the specific category>"
+}}"""
+
+    response = await complete(
+        messages=[{"role": "user", "content": prompt}],
+        system="You are a visual style analyst. Output ONLY valid JSON.",
+        max_tokens=200,
+    )
+    try:
+        parsed = _extract_json(response.content[0].text)
+        if isinstance(parsed, dict):
+            return (
+                parsed.get("visual_style_descriptor", ""),
+                parsed.get("content_category", ""),
+            )
+    except Exception as exc:
+        logger.warning("[generate_style_fields] parse failed (%s) — returning empty", exc)
+    return "", ""
 
 
 # ---------------------------------------------------------------------------
@@ -510,7 +545,7 @@ async def run(state: ContentEngineState) -> dict:
         "current_video_ref": state.get("current_video_ref") if is_video_checkpoint else None,
         "completed_extends": state.get("completed_extends", 0) if is_video_checkpoint else 0,
         "all_video_refs":    state.get("all_video_refs", []) if is_video_checkpoint else [],
-        "content_category":  state.get("content_category", ""),  # BUGFIX
+        "content_category":  state.get("content_category", ""),
     }
 
     # visual_style_descriptor: first item sets the anchor; subsequent items keep

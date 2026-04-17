@@ -41,20 +41,20 @@ def _route_after_orchestrator(state: ContentEngineState) -> Literal["content_age
         return "video_agent"
     return "content_agent"
 
-def _route_after_content_agent(state) -> Literal["image_agent", "video_agent", "content_validator"]:  # PARALLEL
-    pipeline   = state.get("pipeline_type", "text_only")  # PARALLEL
-    is_retry   = state.get("retry_count", 0) > 0  # PARALLEL
-    has_images = bool(state.get("generated_images"))  # PARALLEL
+def _route_after_content_agent(state) -> Literal["image_agent", "video_agent", "content_validator"]:
+    pipeline   = state.get("pipeline_type", "text_only")
+    is_retry   = state.get("retry_count", 0) > 0
+    has_images = bool(state.get("generated_images"))
 
-    if pipeline == "text_only":  # PARALLEL
-        return "content_validator"  # PARALLEL
+    if pipeline == "text_only":
+        return "content_validator"
     # Retry with existing images — skip Image Agent
-    if is_retry and has_images and pipeline == "text_image":  # PARALLEL
-        return "content_validator"  # PARALLEL
+    if is_retry and has_images and pipeline == "text_image":
+        return "content_validator"
     # full_video with style_reference already generated upfront — skip Image Agent
-    if pipeline == "full_video" and state.get("style_reference_image"):  # PARALLEL
-        return "video_agent"  # PARALLEL
-    return "image_agent"  # PARALLEL
+    if pipeline == "full_video" and state.get("style_reference_image"):
+        return "video_agent"
+    return "image_agent"
 
 def _route_after_image_agent(state: ContentEngineState) -> Literal["video_agent", "content_validator"]:
     return "video_agent" if state.get("pipeline_type") == "full_video" else "content_validator"
@@ -101,11 +101,11 @@ def build_graph() -> tuple[StateGraph, MemorySaver]:
         _route_after_orchestrator,
         {"content_agent": "content_agent", "video_agent": "video_agent"}
     )
-    builder.add_conditional_edges("content_agent", _route_after_content_agent, {  # PARALLEL
-        "image_agent":       "image_agent",        # PARALLEL
-        "video_agent":       "video_agent",        # PARALLEL
-        "content_validator": "content_validator",  # PARALLEL
-    })  # PARALLEL
+    builder.add_conditional_edges("content_agent", _route_after_content_agent, {
+        "image_agent":       "image_agent",
+        "video_agent":       "video_agent",
+        "content_validator": "content_validator",
+    })
     builder.add_conditional_edges("image_agent",       _route_after_image_agent,  {"video_agent": "video_agent",  "content_validator": "content_validator"})
     builder.add_edge("video_agent", "content_validator")
     builder.add_conditional_edges("content_validator", _route_after_validator,    {"content_agent": "content_agent", END: END})

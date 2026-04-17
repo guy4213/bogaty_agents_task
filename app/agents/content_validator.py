@@ -10,14 +10,7 @@ from app.services.claude_client import complete, estimate_cost
 
 logger = logging.getLogger(__name__)
 
-CAPTION_LIMITS = {
-    "instagram": 2200, "tiktok": 2200, "twitter": 280,
-    "telegram": 4096,  "facebook": 63206,
-}
-HASHTAG_LIMITS = {
-    "instagram": 30, "tiktok": 30, "twitter": 5,
-    "telegram": 0,   "facebook": 10,
-}
+from app.constants import CAPTION_LIMITS, HASHTAG_LIMITS
 VIDEO_DURATION_LIMITS = {
     "tiktok":    (15, 180),
     "instagram": (3, 90),

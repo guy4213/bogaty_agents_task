@@ -18,7 +18,7 @@ class ContentEngineState(TypedDict):
 
     # Style reference — set by Image Agent after first image generation
     style_reference_image: Optional[str]   # S3 key of first generated image — style anchor
-    food_reference_image: Optional[str]    # BUGFIX
+    food_reference_image: Optional[str]
     visual_style_descriptor: str           # One-sentence style guide from Content Agent
 
     # Agent outputs — accumulated progressively

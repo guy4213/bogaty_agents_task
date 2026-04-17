@@ -52,7 +52,7 @@ class GenerateRequest(BaseModel):
     platform: Platform
     content_type: ContentType
     language: Language
-    quantity: int = Field(..., ge=1, le=200)  # FIX: raised ceiling to match _MAX_QUANTITY["comment"]=200
+    quantity: int = Field(..., ge=1, le=200)
     description: str = Field(..., min_length=5, max_length=2000)
 
     @field_validator("quantity")

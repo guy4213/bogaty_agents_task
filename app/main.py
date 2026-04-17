@@ -85,12 +85,12 @@ app = FastAPI(
 # ---------------------------------------------------------------------------
 # Input validation — max quantity per content_type based on API capacity
 # ---------------------------------------------------------------------------
-_MAX_QUANTITY: dict[str, int] = {  # PARALLEL
-    "comment": 200,  # PARALLEL
-    "post":    50,   # PARALLEL
-    "story":   50,   # PARALLEL
-    "reels":   50,   # PARALLEL
-}  # PARALLEL
+_MAX_QUANTITY: dict[str, int] = {
+    "comment": 200,
+    "post":    50,
+    "story":   50,
+    "reels":   50,
+}
 
 # ---------------------------------------------------------------------------
 # POST /generate
@@ -104,16 +104,16 @@ async def generate(request: GenerateRequest, background_tasks: BackgroundTasks):
     Poll /tasks/{task_id} for status and results.
     """
     # Validate quantity against system limits
-    max_qty = _MAX_QUANTITY.get(request.content_type.value, 50)  # PARALLEL
-    if request.quantity > max_qty:  # PARALLEL  # FIX: removed dead ge=1 guard (Pydantic enforces it)
-        raise HTTPException(  # PARALLEL
-            status_code=422,  # PARALLEL
-            detail=(  # PARALLEL
-                f"quantity={request.quantity} exceeds the maximum for "  # PARALLEL
-                f"content_type='{request.content_type.value}' (max={max_qty}). "  # PARALLEL
-                f"Submit multiple requests to generate larger batches."  # PARALLEL
-            ),  # PARALLEL
-        )  # PARALLEL
+    max_qty = _MAX_QUANTITY.get(request.content_type.value, 50)
+    if request.quantity > max_qty:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"quantity={request.quantity} exceeds the maximum for "
+                f"content_type='{request.content_type.value}' (max={max_qty}). "
+                f"Submit multiple requests to generate larger batches."
+            ),
+        )
 
     record = await task_store.create(
         platform=request.platform.value,
