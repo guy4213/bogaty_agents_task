@@ -3,8 +3,49 @@
 @tailwind utilities;
 
 @layer base {
-  html {
-    font-family: Inter, system-ui, sans-serif;
-    -webkit-font-smoothing: antialiased;
+  :root {
+    --accent: #6366f1;
+    --accent-light: #818cf8;
+    --accent-dim: rgba(99, 102, 241, 0.12);
+    --accent-border: rgba(99, 102, 241, 0.3);
+    --bg: #0f1117;
+    --surface: #161b27;
+    --surface2: #1e2436;
+    --surface3: #252d42;
+    --border: rgba(255, 255, 255, 0.07);
+    --border2: rgba(255, 255, 255, 0.12);
+    --fg1: #f0f2f8;
+    --fg2: #8892a4;
+    --fg3: #5a647a;
+    --success: #22c55e;
+    --warning: #f59e0b;
+    --danger: #ef4444;
+    --radius: 10px;
+    --radius-sm: 6px;
+    --font: var(--font-inter), 'Inter', sans-serif;
+    --mono: 'JetBrains Mono', monospace;
   }
+
+  html, body {
+    height: 100%;
+    font-family: var(--font);
+    -webkit-font-smoothing: antialiased;
+    background: var(--bg);
+    color: var(--fg1);
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--surface3); border-radius: 2px; }
+
+  input[type='number']::-webkit-inner-spin-button,
+  input[type='number']::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type='number'] { -moz-appearance: textfield; }
 }

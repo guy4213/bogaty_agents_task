@@ -3,35 +3,18 @@
 import { use } from 'react';
 import Link from 'next/link';
 import { useTask } from '@/hooks/useTask';
+import { Topbar } from '@/components/Topbar';
 import { PipelineStrip } from '@/components/pipeline/PipelineStrip';
 import { MetricsLine } from '@/components/metrics/MetricsLine';
 import { ResultGallery } from '@/components/results/ResultGallery';
 
-const STATUS_BADGE: Record<string, { label: string; classes: string }> = {
-  pending: {
-    label: 'Pending',
-    classes: 'bg-zinc-100 text-zinc-600',
-  },
-  processing: {
-    label: 'Processing',
-    classes: 'bg-indigo-100 text-indigo-700',
-  },
-  completed: {
-    label: 'Completed',
-    classes: 'bg-emerald-100 text-emerald-700',
-  },
-  partial: {
-    label: 'Partial',
-    classes: 'bg-amber-100 text-amber-700',
-  },
-  failed: {
-    label: 'Failed',
-    classes: 'bg-rose-100 text-rose-700',
-  },
-  waiting_for_service: {
-    label: 'Waiting',
-    classes: 'bg-amber-100 text-amber-700',
-  },
+const STATUS_BADGE: Record<string, { label: string; color: string; bg: string }> = {
+  pending:             { label: 'Pending',    color: 'var(--fg3)',        bg: 'var(--surface3)' },
+  processing:          { label: 'Processing', color: 'var(--accent-light)', bg: 'var(--accent-dim)' },
+  completed:           { label: 'Completed',  color: '#4ade80',           bg: 'rgba(34,197,94,0.1)' },
+  partial:             { label: 'Partial',    color: '#fbbf24',           bg: 'rgba(245,158,11,0.1)' },
+  failed:              { label: 'Failed',     color: '#f87171',           bg: 'rgba(239,68,68,0.1)' },
+  waiting_for_service: { label: 'Waiting',    color: '#fbbf24',           bg: 'rgba(245,158,11,0.1)' },
 };
 
 interface PageProps {
@@ -44,117 +27,124 @@ export default function TaskDetailPage({ params }: PageProps) {
 
   if (isLoading) {
     return (
-      <div className="flex items-center gap-2 text-sm text-zinc-500 py-16">
-        <div className="w-4 h-4 border-2 border-indigo-300 border-t-indigo-600 rounded-full animate-spin" />
-        Loading task…
-      </div>
+      <>
+        <Topbar title="Task Detail" subtitle="Loading…" />
+        <div className="flex-1 flex items-center justify-center">
+          <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--fg3)' }}>
+            <div className="w-4 h-4 border-2 rounded-full animate-spin" style={{ borderColor: 'var(--accent-dim)', borderTopColor: 'var(--accent)' }} />
+            Loading task…
+          </div>
+        </div>
+      </>
     );
   }
 
   if (statusQuery.isError || !statusQuery.data) {
     return (
-      <div className="py-16 text-center">
-        <p className="text-rose-600 font-medium mb-2">Task not found</p>
-        <p className="text-sm text-zinc-500 mb-4">
-          Task <span className="font-mono">{taskId}</span> could not be loaded.
-        </p>
-        <Link href="/" className="text-sm text-indigo-600 hover:text-indigo-800">
-          ← New task
-        </Link>
-      </div>
+      <>
+        <Topbar title="Task Detail" subtitle="Not found" />
+        <div className="flex-1 flex flex-col items-center justify-center gap-3">
+          <p className="font-medium" style={{ color: 'var(--danger)' }}>Task not found</p>
+          <p className="text-sm font-mono" style={{ color: 'var(--fg3)' }}>{taskId}</p>
+          <Link href="/" className="text-sm mt-2" style={{ color: 'var(--accent-light)' }}>
+            ← New task
+          </Link>
+        </div>
+      </>
     );
   }
 
   const task = statusQuery.data;
   const content = contentQuery.data;
   const badge = STATUS_BADGE[task.status] ?? STATUS_BADGE['pending'];
-  const isProcessing =
-    task.status === 'processing' || task.status === 'pending';
+  const isProcessing = task.status === 'processing' || task.status === 'pending';
 
   return (
-    <div className="space-y-8">
-      {/* Header */}
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-3 mb-1">
-            <h1 className="text-xl font-semibold text-zinc-900 capitalize">
-              {task.platform} · {task.content_type}
-            </h1>
-            <span
-              className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${badge.classes}`}
-            >
-              {isProcessing && (
-                <span className="w-1.5 h-1.5 rounded-full bg-current mr-1.5 animate-pulse" />
-              )}
-              {badge.label}
-            </span>
+    <>
+      <Topbar
+        title={`${task.platform.charAt(0).toUpperCase() + task.platform.slice(1)} · ${task.content_type}`}
+        subtitle={task.task_id}
+        actions={
+          <Link href="/" className="text-[12px] font-medium px-3 py-[5px] rounded-[var(--radius-sm)] transition-colors" style={{ border: '1px solid var(--border2)', color: 'var(--fg2)' }}>
+            ← New task
+          </Link>
+        }
+      />
+
+      <div className="flex-1 overflow-y-auto p-8 space-y-8">
+        {/* Status badge */}
+        <div className="flex items-center gap-3">
+          <span
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[12px] font-semibold"
+            style={{ background: badge.bg, color: badge.color }}
+          >
+            {isProcessing && (
+              <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
+            )}
+            {badge.label}
+          </span>
+          <span className="text-[11px] font-mono" style={{ color: 'var(--fg3)' }}>
+            {task.task_id}
+          </span>
+        </div>
+
+        {/* Pipeline */}
+        <section>
+          <p className="text-[10px] font-semibold uppercase tracking-widest mb-3" style={{ color: 'var(--fg3)' }}>
+            Pipeline
+          </p>
+          <PipelineStrip task={task} />
+        </section>
+
+        {/* Metrics */}
+        <section>
+          <p className="text-[10px] font-semibold uppercase tracking-widest mb-2" style={{ color: 'var(--fg3)' }}>
+            Progress
+          </p>
+          <MetricsLine task={task} />
+        </section>
+
+        {/* Errors */}
+        {task.errors.length > 0 && (
+          <section>
+            <p className="text-[10px] font-semibold uppercase tracking-widest mb-2" style={{ color: 'var(--fg3)' }}>
+              Errors
+            </p>
+            <ul className="space-y-1">
+              {task.errors.map((err, i) => (
+                <li
+                  key={i}
+                  className="text-[11px] font-mono px-3 py-1.5 rounded-[var(--radius-sm)]"
+                  style={{ background: 'rgba(239,68,68,0.08)', color: 'var(--danger)', border: '1px solid rgba(239,68,68,0.15)' }}
+                >
+                  {err}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {/* Results */}
+        {content && content.assets && content.assets.length > 0 && (
+          <section>
+            <p className="text-[10px] font-semibold uppercase tracking-widest mb-4" style={{ color: 'var(--fg3)' }}>
+              Results
+            </p>
+            <ResultGallery
+              contentType={task.content_type}
+              assets={content.assets}
+              isProcessing={isProcessing}
+            />
+          </section>
+        )}
+
+        {isProcessing && (!content || !content.assets || content.assets.length === 0) && (
+          <div className="flex items-center gap-2 py-4 text-sm" style={{ color: 'var(--fg3)' }}>
+            <div className="w-4 h-4 border-2 rounded-full animate-spin" style={{ borderColor: 'var(--accent-dim)', borderTopColor: 'var(--accent)' }} />
+            Waiting for results…
           </div>
-          <p className="text-xs text-zinc-400 font-mono">{task.task_id}</p>
-        </div>
-
-        <Link
-          href="/"
-          className="text-sm text-indigo-600 hover:text-indigo-800 mt-1"
-        >
-          ← New task
-        </Link>
+        )}
       </div>
-
-      {/* Pipeline */}
-      <section>
-        <h2 className="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-3">
-          Pipeline
-        </h2>
-        <PipelineStrip task={task} />
-      </section>
-
-      {/* Metrics */}
-      <section>
-        <h2 className="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">
-          Progress
-        </h2>
-        <MetricsLine task={task} />
-      </section>
-
-      {/* Errors */}
-      {task.errors.length > 0 && (
-        <section>
-          <h2 className="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">
-            Errors
-          </h2>
-          <ul className="space-y-1">
-            {task.errors.map((err, i) => (
-              <li
-                key={i}
-                className="text-xs text-rose-600 bg-rose-50 border border-rose-100 rounded px-3 py-1.5 font-mono"
-              >
-                {err}
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      {/* Results */}
-      {content && content.assets && content.assets.length > 0 && (
-        <section>
-          <h2 className="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-4">
-            Results
-          </h2>
-          <ResultGallery
-            contentType={task.content_type}
-            assets={content.assets}
-            isProcessing={isProcessing}
-          />
-        </section>
-      )}
-
-      {isProcessing && (!content || !content.assets || content.assets.length === 0) && (
-        <div className="flex items-center gap-2 text-sm text-zinc-500 py-4">
-          <div className="w-4 h-4 border-2 border-indigo-300 border-t-indigo-600 rounded-full animate-spin" />
-          Waiting for results…
-        </div>
-      )}
-    </div>
+    </>
   );
 }

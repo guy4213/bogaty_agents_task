@@ -1,7 +1,15 @@
 import type { Metadata } from 'next';
+import { Inter } from 'next/font/google';
 import './globals.css';
 import { QueryProvider } from '@/providers/QueryProvider';
-import { Header } from '@/components/Header';
+import { Sidebar } from '@/components/Sidebar';
+
+const inter = Inter({
+  subsets: ['latin'],
+  weight: ['300', '400', '500', '600', '700'],
+  variable: '--font-inter',
+  display: 'swap',
+});
 
 export const metadata: Metadata = {
   title: 'Content Engine',
@@ -14,11 +22,13 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
-      <body className="bg-zinc-50 text-zinc-900 min-h-screen">
+    <html lang="en" className={inter.variable}>
+      <body className="flex h-screen overflow-hidden">
         <QueryProvider>
-          <Header />
-          <main className="max-w-6xl mx-auto px-4 sm:px-6 py-8">{children}</main>
+          <Sidebar />
+          <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+            {children}
+          </div>
         </QueryProvider>
       </body>
     </html>
