@@ -87,7 +87,7 @@ export function PipelineStrip({ task }: PipelineStripProps) {
 
   return (
     <div
-      className="flex items-center gap-1 px-4 py-3 rounded-[var(--radius-sm)] overflow-x-auto"
+      className="flex items-center gap-1 px-4 py-3 rounded-[var(--radius-sm)] overflow-x-auto flex-wrap sm:flex-nowrap"
       style={{ background: 'var(--surface2)', border: '1px solid var(--border)' }}
     >
       {ALL_NODES.map((node, i) => {

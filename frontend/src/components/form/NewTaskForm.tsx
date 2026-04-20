@@ -192,7 +192,7 @@ export function NewTaskForm({ contentType, setContentType, quantity, setQuantity
           <span className="text-[12px] font-semibold" style={{ color: 'var(--fg2)' }}>
             Platform
           </span>
-          <div className="grid grid-cols-5 gap-1.5">
+          <div className="grid grid-cols-5 sm:grid-cols-5 gap-1.5">
             {PLATFORMS.map((p) => {
               const isActive = platform === p.value;
               return (
@@ -292,7 +292,7 @@ export function NewTaskForm({ contentType, setContentType, quantity, setQuantity
               max {maxQty}
             </span>
           </div>
-          <div className="flex items-center gap-2.5 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap">
             <div
               className="flex items-center overflow-hidden w-fit"
               style={{ border: '1px solid var(--border2)', borderRadius: 'var(--radius-sm)', background: 'var(--surface2)' }}
