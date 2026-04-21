@@ -8,7 +8,6 @@ from app.qa.circuit_breaker import get_breaker
 
 logger = logging.getLogger(__name__)
 
-_VEO_POLL_INTERVAL_SEC = 5
 _VEO_MAX_POLL_SEC = 600
 
 # In-memory store for Vertex AI video bytes (Vertex returns bytes, not URIs)
@@ -235,7 +234,7 @@ async def extend_video(video_uri: str, prompt: str, extend_index: int) -> str:
     delays = [15, 30, 60]
     last_exc: Exception | None = None
 
-    for attempt, variation in enumerate(_NEUTRAL_VARIATIONS):
+    for variation in _NEUTRAL_VARIATIONS:
         final_prompt = prompt + variation
 
         async def _call(p=final_prompt) -> str:
@@ -258,24 +257,32 @@ async def extend_video(video_uri: str, prompt: str, extend_index: int) -> str:
             logger.info("VideoAgent: extend %d -> GCS: %s", extend_index + 1, uri)
             return uri
 
-        try:
-            result = await breaker.call(_call)
-            return result  
+        overload_retries = 0
+        while True:
+            try:
+                result = await breaker.call(_call)
+                return result
 
-        except Exception as exc:
-            last_exc = exc
-            if _is_veo_overload(exc) and attempt < len(delays):
-                wait = delays[attempt]
-                logger.warning(
-                    "VideoAgent: extend %d overload (attempt %d/4) — waiting %ds. variation='%s'",
-                    extend_index + 1, attempt + 1, wait, variation,
-                )
-                await asyncio.sleep(wait)
-                continue
-            raise  # שגיאה שאינה overload — throw מיידי
+            except Exception as exc:
+                last_exc = exc
+                if _is_veo_overload(exc) and overload_retries < len(delays):
+                    wait = delays[overload_retries]
+                    overload_retries += 1
+                    logger.warning(
+                        "VideoAgent: extend %d overload (attempt %d/4) — waiting %ds. variation='%s'",
+                        extend_index + 1, overload_retries, wait, variation,
+                    )
+                    await asyncio.sleep(wait)
+                    continue  # retry same variation
+                break  # non-overload or overload retries exhausted — try next variation
+
+        logger.warning(
+            "VideoAgent: extend %d non-overload failure — trying next variation. exc=%s",
+            extend_index + 1, last_exc,
+        )
 
     raise last_exc or RuntimeError(
-        f"extend_video failed after 4 attempts — extend_index={extend_index}"
+        f"extend_video failed after {len(_NEUTRAL_VARIATIONS)} variations — extend_index={extend_index}"
     )
 
 async def download_video(video_uri: str) -> bytes:
@@ -310,15 +317,41 @@ async def download_video(video_uri: str) -> bytes:
         return resp.content
 async def _poll(client, operation):
     deadline = time.monotonic() + _VEO_MAX_POLL_SEC
+    interval = 5
     while not operation.done:
         if time.monotonic() > deadline:
             raise TimeoutError(f"Veo operation timed out after {_VEO_MAX_POLL_SEC}s")
-        await asyncio.sleep(_VEO_POLL_INTERVAL_SEC)
+        await asyncio.sleep(interval)
+        interval = min(interval * 2, 30)
         operation = await client.aio.operations.get(operation)
     if operation.error:
         raise RuntimeError(f"Veo operation failed: {operation.error}")
     return operation
 
+
+
+async def cleanup_veo_temp_files(gcs_uris: list[str], project_id: str) -> None:
+    """Delete all gs:// blobs from gcs_uris concurrently. Logs per-blob errors; never raises."""
+    from google.cloud import storage as gcs
+    loop = asyncio.get_event_loop()
+    total = len(gcs_uris)
+
+    async def _delete_one(uri: str) -> bool:
+        def _del():
+            client = gcs.Client(project=project_id)
+            bucket_name = uri.split("/")[2]
+            blob_name = "/".join(uri.split("/")[3:])
+            client.bucket(bucket_name).blob(blob_name).delete()
+        try:
+            await loop.run_in_executor(None, _del)
+            return True
+        except Exception as exc:
+            logger.warning("cleanup_veo_temp_files: failed to delete %s — %s", uri, exc)
+            return False
+
+    results = await asyncio.gather(*[_delete_one(uri) for uri in gcs_uris])
+    deleted = sum(results)
+    logger.info("Cleaned up %d/%d veo-temp blobs", deleted, total)
 
 
 def _extract_uri(operation) -> str:
@@ -364,7 +397,7 @@ async def generate_video_from_frame(
     delays  = [15, 30, 60]
     last_exc: Exception | None = None
 
-    for attempt, variation in enumerate(_NEUTRAL_VARIATIONS):
+    for variation in _NEUTRAL_VARIATIONS:
         final_prompt = prompt + variation
 
         async def _call(p=final_prompt) -> str:
@@ -396,22 +429,30 @@ async def generate_video_from_frame(
             )
             return uri
 
-        try:
-            result = await breaker.call(_call)
-            return result  # ← חזור מיידי בהצלחה
+        overload_retries = 0
+        while True:
+            try:
+                result = await breaker.call(_call)
+                return result  # ← חזור מיידי בהצלחה
 
-        except Exception as exc:
-            last_exc = exc
-            if _is_veo_overload(exc) and attempt < len(delays):
-                wait = delays[attempt]
-                logger.warning(
-                    "VideoAgent: payoff overload (attempt %d/4) — waiting %ds.",
-                    attempt + 1, wait,
-                )
-                await asyncio.sleep(wait)
-                continue
-            raise
+            except Exception as exc:
+                last_exc = exc
+                if _is_veo_overload(exc) and overload_retries < len(delays):
+                    wait = delays[overload_retries]
+                    overload_retries += 1
+                    logger.warning(
+                        "VideoAgent: payoff overload (attempt %d/4) — waiting %ds.",
+                        overload_retries, wait,
+                    )
+                    await asyncio.sleep(wait)
+                    continue  # retry same variation
+                break  # non-overload or overload retries exhausted — try next variation
+
+        logger.warning(
+            "VideoAgent: payoff non-overload failure — trying next variation. exc=%s",
+            last_exc,
+        )
 
     raise last_exc or RuntimeError(
-        f"generate_video_from_frame failed after 4 attempts — extend_index={extend_index}"
+        f"generate_video_from_frame failed after {len(_NEUTRAL_VARIATIONS)} variations — extend_index={extend_index}"
     )

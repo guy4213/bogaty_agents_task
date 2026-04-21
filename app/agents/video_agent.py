@@ -233,6 +233,7 @@ async def run(state: ContentEngineState) -> dict:
     current_video_ref: str | None = state.get("current_video_ref")
     completed_extends: int        = state.get("completed_extends", 0)
     all_video_refs: list[str]     = state.get("all_video_refs", [])
+    scene1_frame_cache: bytes | None = None
 
     if current_video_ref:
         logger.info(
@@ -250,6 +251,20 @@ async def run(state: ContentEngineState) -> dict:
         completed_extends = 0
         all_video_refs    = [current_video_ref]
         logger.info("[%s] item_%d · VideoAgent: initial clip ready — ref=%s", task_id, item_index, current_video_ref)
+
+        # Pre-extract Scene 1 last frame to avoid re-download at payoff time
+        try:
+            _scene1_bytes = await _download_single_clip(current_video_ref, cfg.vertex_project_id)
+            scene1_frame_cache = extract_last_frame(_scene1_bytes)
+            logger.info(
+                "[%s] item_%d · VideoAgent: scene 1 frame cached (%d bytes)",
+                task_id, item_index, len(scene1_frame_cache),
+            )
+        except Exception as _cache_exc:
+            logger.warning(
+                "[%s] item_%d · VideoAgent: scene 1 frame cache failed (%s) — will download at payoff",
+                task_id, item_index, _cache_exc,
+            )
 
     # ------------------------------------------------------------------
     # Extend loop
@@ -269,16 +284,23 @@ async def run(state: ContentEngineState) -> dict:
             )
 
             # ── Extract frame מScene 1 — consistency מושלמת ──
-            logger.info("[%s] item_%d · VideoAgent: downloading Scene 1 for frame extraction", task_id, item_index)
-            scene1_bytes = await _download_single_clip(
-                all_video_refs[0],  # ← ref של Scene 1 תמיד ראשון
-                cfg.vertex_project_id,
-            )
-            extracted_anchor_frame = extract_last_frame(scene1_bytes)
-            logger.info(
-                "[%s] item_%d · VideoAgent: scene 1 frame extracted (%d bytes)",
-                task_id, item_index, len(extracted_anchor_frame),
-            )
+            if scene1_frame_cache is not None:
+                extracted_anchor_frame = scene1_frame_cache
+                logger.info(
+                    "[%s] item_%d · VideoAgent: scene 1 frame extracted (%d bytes)",
+                    task_id, item_index, len(extracted_anchor_frame),
+                )
+            else:
+                logger.info("[%s] item_%d · VideoAgent: downloading Scene 1 for frame extraction", task_id, item_index)
+                scene1_bytes = await _download_single_clip(
+                    all_video_refs[0],  # ← ref של Scene 1 תמיד ראשון
+                    cfg.vertex_project_id,
+                )
+                extracted_anchor_frame = extract_last_frame(scene1_bytes)
+                logger.info(
+                    "[%s] item_%d · VideoAgent: scene 1 frame extracted (%d bytes)",
+                    task_id, item_index, len(extracted_anchor_frame),
+                )
 
             try:
                 current_video_ref = await generate_video_from_frame(
@@ -365,6 +387,16 @@ async def run(state: ContentEngineState) -> dict:
     total_duration = sum(scene_durations) if scene_durations else (
         cfg.veo_initial_duration_sec + required_extends * cfg.veo_extend_duration_sec
     )
+
+    if not get_settings().dry_run:
+        try:
+            from app.services.gemini_client import cleanup_veo_temp_files
+            await cleanup_veo_temp_files(all_video_refs, cfg.vertex_project_id)
+        except Exception as _cleanup_exc:
+            logger.warning(
+                "[%s] item_%d · VideoAgent: GCS cleanup failed (%s) — continuing",
+                task_id, item_index, _cleanup_exc,
+            )
 
     # ------------------------------------------------------------------
     # Google TTS voice track — mix with Veo background music

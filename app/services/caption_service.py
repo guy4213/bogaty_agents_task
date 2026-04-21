@@ -434,13 +434,17 @@ def _sync_merge_clips(
     client = gcs.Client(project=project_id)
 
     # ------------------------------------------------------------------
-    # שלב 1 — הורד כל קליפ עם retry
+    # שלב 1 — הורד כל קליפ עם retry (במקביל)
     # ------------------------------------------------------------------
-    clip_paths = []
-    for i, uri in enumerate(gcs_uris):
+    import concurrent.futures
+
+    clip_paths = [tmp_dir / f"clip_{i}.mp4" for i in range(len(gcs_uris))]
+
+    def _download_clip(args):
+        i, uri = args
         bucket_name = uri.split("/")[2]
         blob_name   = "/".join(uri.split("/")[3:])
-        clip_path   = tmp_dir / f"clip_{i}.mp4"
+        clip_path   = clip_paths[i]
         logger.info("%s · downloading clip %d/%d: %s", prefix, i + 1, len(gcs_uris), uri)
 
         # retry — I2V עלול להיות לא מוכן מיידית ב-GCS
@@ -457,7 +461,8 @@ def _sync_merge_clips(
         else:
             raise RuntimeError(f"Clip {i+1} download failed after 5 retries — size={clip_path.stat().st_size}")
 
-        clip_paths.append(clip_path)
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        list(executor.map(_download_clip, enumerate(gcs_uris)))
 
     # ------------------------------------------------------------------
     # שלב 2 — חתוך כל קליפ לחלק החדש שלו
