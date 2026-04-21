@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 import uuid
 
-from app.models import TaskStatus, PipelineType
+from app.models import TaskStatus, PipelineType, AssetRecord
 
 
 @dataclass
@@ -30,6 +30,9 @@ class TaskRecord:
     # Storage
     manifest_s3_key: str | None = None
     presigned_manifest_url: str | None = None
+
+    # Partial assets collected as items complete (used for live progress)
+    partial_assets: list[AssetRecord] = field(default_factory=list)
 
     # Error log
     errors: list[str] = field(default_factory=list)
@@ -101,6 +104,12 @@ class TaskStore:
             record = self._tasks.get(task_id)
             if record:
                 record.errors.append(error)
+
+    async def add_assets(self, task_id: str, assets: list[AssetRecord]) -> None:
+        async with self._lock:
+            record = self._tasks.get(task_id)
+            if record:
+                record.partial_assets.extend(assets)
 
     async def increment_cost(self, task_id: str, amount: float) -> None:
         async with self._lock:

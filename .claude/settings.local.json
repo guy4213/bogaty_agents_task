@@ -4,7 +4,9 @@
       "Bash(wc:*)",
       "Bash(claude mcp *)",
       "Bash(claude.exe mcp *)",
-      "Bash(npx claude *)"
+      "Bash(npx claude *)",
+      "Bash(python -c \"from app.agents.video_agent import run; from app.services.tts_service import synthesize; print\\('OK'\\)\")"
+
     ]
   }
 }

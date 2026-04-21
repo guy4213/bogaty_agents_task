@@ -125,28 +125,32 @@ def _make_reel_script(lang: str) -> str:
                 "scene": 1, "duration_sec": 8,
                 "visual_description": "ידיים קוצצות עגבניות טריות על לוח עץ",
                 "caption_text":    "מרכיבים טריים בלבד",
-                "caption_text_en": "Fresh ingredients only",   # ← FIX
+                "caption_text_en": "Fresh ingredients only",
+                "narrator_text":   "הכל מתחיל ממרכיבים טריים ואיכותיים, שנבחרו בקפידה.",
                 "audio_mood": "אווירה רגועה של מטבח",
             },
             {
                 "scene": 2, "duration_sec": 7,
                 "visual_description": "פסטה מתבשלת בסיר עם קיטור עולה",
                 "caption_text":    "מבשלים עם אהבה",
-                "caption_text_en": "Cooking with love",        # ← FIX
+                "caption_text_en": "Cooking with love",
+                "narrator_text":   "הפסטה מתבשלת לאיטה, וריח המטבח כבר ממלא את הבית.",
                 "audio_mood": "צלילי מטבח",
             },
             {
                 "scene": 3, "duration_sec": 7,
                 "visual_description": "הגשת הפסטה על צלחת לבנה עם ריחן",
                 "caption_text":    "פרזנטציה מושלמת",
-                "caption_text_en": "Perfect presentation",     # ← FIX
+                "caption_text_en": "Perfect presentation",
+                "narrator_text":   "כשהרוטב פוגש את הפסטה, נוצרת מנה שאי אפשר לעמוד בפניה.",
                 "audio_mood": "מוזיקה עדינה",
             },
             {
                 "scene": 4, "duration_sec": 7,
                 "visual_description": "צילום תקריב של המנה המוגמרת",
                 "caption_text":    "תנסו בבית!",
-                "caption_text_en": "Try this at home!",        # ← FIX
+                "caption_text_en": "Try this at home!",
+                "narrator_text":   "זו לא רק ארוחה — זו חוויה שתרצו לחזור אליה שוב ושוב.",
                 "audio_mood": "מוזיקה עליזה",
             },
         ]
@@ -158,6 +162,7 @@ def _make_reel_script(lang: str) -> str:
                 "visual_description": "Hands chopping fresh tomatoes on a wooden board",
                 "caption_text":    "Fresh ingredients only",
                 "caption_text_en": "Fresh ingredients only",
+                "narrator_text":   "It all starts with the freshest ingredients, carefully selected for the perfect dish.",
                 "audio_mood": "Calm kitchen ambience",
             },
             {
@@ -165,6 +170,7 @@ def _make_reel_script(lang: str) -> str:
                 "visual_description": "Pasta boiling in pot with rising steam",
                 "caption_text":    "Cooking with love",
                 "caption_text_en": "Cooking with love",
+                "narrator_text":   "The pasta cooks slowly, filling the kitchen with an incredible aroma.",
                 "audio_mood": "Kitchen sounds",
             },
             {
@@ -172,6 +178,7 @@ def _make_reel_script(lang: str) -> str:
                 "visual_description": "Plating pasta on white dish with basil",
                 "caption_text":    "Perfect presentation",
                 "caption_text_en": "Perfect presentation",
+                "narrator_text":   "When the sauce meets the pasta, something truly irresistible is born.",
                 "audio_mood": "Soft music",
             },
             {
@@ -179,6 +186,7 @@ def _make_reel_script(lang: str) -> str:
                 "visual_description": "Close-up beauty shot of finished dish",
                 "caption_text":    "Try this at home!",
                 "caption_text_en": "Try this at home!",
+                "narrator_text":   "This isn't just a meal — it's an experience you'll want to recreate again and again.",
                 "audio_mood": "Upbeat music",
             },
         ]
@@ -314,12 +322,16 @@ async def mock_upload_bytes(key: str, data: bytes, content_type: str = "") -> st
 
 async def mock_presigned_url(key: str, expiry_sec: int = 3600) -> str:
     return f"file://{_LOCAL_S3_ROOT / key}"
-async def mock_burn_hebrew_captions(
+async def mock_burn_captions(
     video_bytes: bytes,
     scenes: list,
     initial_duration: int,
     extend_duration: int,
+    lang: str = "he",
+    task_id: str = "",
+    item_index: int = -1,
 ) -> bytes:
     """Mock FFmpeg caption burning — returns video bytes unchanged."""
-    logger.info("[DRY_RUN] MockFFmpeg: skipping Hebrew caption burn (%d bytes)", len(video_bytes))
+    prefix = f"[{task_id}] item_{item_index}" if task_id else "MockFFmpeg"
+    logger.info("[DRY_RUN] %s · skipping caption burn lang=%s (%d bytes)", prefix, lang, len(video_bytes))
     return video_bytes

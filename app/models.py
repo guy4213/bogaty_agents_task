@@ -80,6 +80,7 @@ class AssetRecord(BaseModel):
     validation_passed: bool
     generation_cost_usd: float = 0.0
     note: str = ""
+    content: Any | None = None  # inline text content; avoids re-reading from S3
 
 
 class TaskManifest(BaseModel):
@@ -110,6 +111,7 @@ class TaskStatusResponse(BaseModel):
     status: TaskStatus
     platform: str
     content_type: str
+    description: str = ""
     quantity_requested: int
     quantity_delivered: int
     quantity_failed: int
