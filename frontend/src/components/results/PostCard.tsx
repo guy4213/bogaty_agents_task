@@ -10,7 +10,7 @@ interface PostCardProps {
   itemIndex: number;
   imageAsset: AssetRecord | undefined;
   captionAsset: AssetRecord | undefined;
-  aspect: '1:1' | '9:16';
+  aspect: '1:1' | '9:16' | '16:9';
   isAnchor: boolean;
 }
 
@@ -18,8 +18,9 @@ function extractCaption(asset: AssetRecord | undefined): { text: string; hashtag
   if (!asset?.content) return { text: '', hashtags: [] };
   const content = asset.content;
   if (typeof content === 'string') return { text: content, hashtags: [] };
-  if (typeof content === 'object' && content !== null) {
-    const obj = content as Record<string, unknown>;
+  // content.json for posts is an array: [{index, text, hashtags, angle}]
+  const obj = (Array.isArray(content) ? content[0] : content) as Record<string, unknown> | null;
+  if (obj && typeof obj === 'object') {
     const text = (typeof obj['text'] === 'string' ? obj['text'] : '') || (typeof obj['caption'] === 'string' ? obj['caption'] : '');
     const hashtags = Array.isArray(obj['hashtags']) ? (obj['hashtags'] as string[]) : [];
     return { text, hashtags };
@@ -32,7 +33,7 @@ export function PostCard({ itemIndex, imageAsset, captionAsset, aspect, isAnchor
   const { text, hashtags } = extractCaption(captionAsset);
   const imageUrl = imageAsset?.download_url ?? null;
   const rtl = text ? isHebrew(text) : false;
-  const aspectClass = aspect === '9:16' ? 'aspect-[9/16]' : 'aspect-square';
+  const aspectClass = aspect === '9:16' ? 'aspect-[9/16]' : aspect === '16:9' ? 'aspect-video' : 'aspect-square';
 
   return (
     <div
@@ -74,7 +75,7 @@ export function PostCard({ itemIndex, imageAsset, captionAsset, aspect, isAnchor
               >
                 {text}
               </p>
-              {text.length > 200 && (
+              {text.length > 100 && (
                 <button
                   type="button"
                   onClick={() => setExpanded((e) => !e)}

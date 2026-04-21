@@ -29,6 +29,7 @@ export interface TaskStatusResponse {
   status: TaskStatus;
   platform: string;
   content_type: string;
+  description?: string;
   quantity_requested: number;
   quantity_delivered: number;
   quantity_failed: number;

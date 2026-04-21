@@ -140,6 +140,7 @@ async def _generate_first(prompt: str, aspect_ratio: str, visual_style_descripto
     )
 
     if not response.generated_images:
+        logger.warning("Imagen returned no images (likely safety filter). prompt=%r", f"{prompt}{style_section}"[:300])
         raise RuntimeError("Imagen returned no images")
     image_bytes = response.generated_images[0].image.image_bytes
     if not image_bytes:

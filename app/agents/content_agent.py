@@ -136,6 +136,23 @@ CRITICAL RULE: If the content is related to food, cooking, baking, a recipe, or 
 For any other topic, output the specific descriptive category (e.g., 'fitness', 'real estate', 'technology', 'science').
 """ if is_first_item else ""
 
+    if is_first_item:
+        schema = f"""\
+{{
+  "visual_style_descriptor": "...",
+  "content_category": "...",
+  "captions": [
+    {{"index": {item_index}, "text": "...", "hashtags": ["#tag1", "#tag2"], "angle": "{framework}"}}
+  ]
+}}"""
+    else:
+        schema = f"""\
+{{
+  "captions": [
+    {{"index": {item_index}, "text": "...", "hashtags": ["#tag1", "#tag2"], "angle": "{framework}"}}
+  ]
+}}"""
+
     return f"""Generate exactly 1 {platform} post caption about: "{desc}"
 
 item_index: {item_index}
@@ -147,16 +164,11 @@ Rules:
 - Max {char_limit} characters
 - Include {hashtag_limit} relevant hashtags (inline at end)
 - Tone: authentic, engaging, platform-appropriate for {platform}
+- CRITICAL: The "text" value MUST be a complete, grammatically finished thought. Never end mid-sentence or mid-word.
 {style_section}
 Return ONLY a valid JSON object. No preamble, no markdown fences.
 Schema:
-{{
-  "visual_style_descriptor": "...",
-  "content_category": "...",
-  "captions": [
-    {{"index": {item_index}, "text": "...", "hashtags": ["#tag1", "#tag2"], "angle": "{framework}"}}
-  ]
-}}"""
+{schema}"""
 def _build_reels_script_prompt(state: ContentEngineState) -> str:
     lang = state["language"]
     desc = state["description"]
@@ -260,12 +272,17 @@ For EACH scene provide:
    - Scene 3: describe what is already done when we cut in (e.g., "journey has begun, ready for main action")
    - Scene 4: MUST list every action from scene 3 as already completed (e.g., "arrived at destination and completely settled — no motion")
 
-3. caption_text / caption_text_en:
-   - caption_text: in {("Hebrew" if lang == "he" else "English")} — for the script file
-   - caption_text_en: ALWAYS in English — for Veo text rendering
-   - {caption_note}
+3. narrator_text:
+   - 1-2 sentences spoken aloud by an off-screen narrator, in {("Hebrew" if lang == "he" else "English")}
+   - Conversational and warm tone; fits the scene's emotional beat
+   - Example (food): "This is the moment everything comes together — rich tomato, fresh basil, and pasta cooked to perfection."
 
-4. audio_mood:
+4. caption_text / caption_text_en:
+   - caption_text: EXACT verbatim copy of narrator_text — word-for-word identical, same language. This is the on-screen subtitle the viewer reads while the narrator speaks.
+   - caption_text_en: ALWAYS in English — concise 8-word version for Veo's internal text rendering prompt only
+   - CRITICAL: caption_text MUST match narrator_text exactly. Do NOT write a different shorter phrase.
+
+5. audio_mood:
    - Specify music energy + tempo + ambient sounds
    - Use abstract musical descriptors ONLY — no instrument names
    - 🚫 FORBIDDEN: "guitar", "piano", "drums", or any physical instrument name
@@ -305,6 +322,7 @@ The first character MUST be {{ and the last MUST be }}.
       "visual_description": "[canonical_subject] — [finished result + components visible + fluid camera + lighting/mood]",
       "caption_text": "...",
       "caption_text_en": "...",
+      "narrator_text": "...",
       "audio_mood": "..."
     }},
     {{
@@ -314,6 +332,7 @@ The first character MUST be {{ and the last MUST be }}.
       "visual_description": "[canonical_subject] — [raw components laid out + first prep/action motion + fluid camera + lighting/mood]",
       "caption_text": "...",
       "caption_text_en": "...",
+      "narrator_text": "...",
       "audio_mood": "..."
     }},
     {{
@@ -323,6 +342,7 @@ The first character MUST be {{ and the last MUST be }}.
       "visual_description": "[canonical_subject] — [main active transformation/process occurs + subject settles completely still at the end, fluid camera + lighting/mood]",
       "caption_text": "...",
       "caption_text_en": "...",
+      "narrator_text": "...",
       "audio_mood": "... peak energy seconds 0-4, decreasing toward end"
     }},
     {{
@@ -332,6 +352,7 @@ The first character MUST be {{ and the last MUST be }}.
       "visual_description": "[canonical_subject] — fully presented in its final state, [specific environmental details], camera slowly pushing in.",
       "caption_text": "...",
       "caption_text_en": "...",
+      "narrator_text": "...",
       "audio_mood": "..."
     }}
   ],
@@ -555,3 +576,5 @@ async def run(state: ContentEngineState) -> dict:
     if content_category and not state.get("content_category"):
             updates["content_category"] = content_category
     return updates
+
+

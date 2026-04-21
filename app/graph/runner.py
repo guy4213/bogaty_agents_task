@@ -342,34 +342,41 @@ async def run_batch(
                 _texts_delivered += len(result.get("generated_texts", []))
             await task_store.increment_cost(task_id, item_cost)
 
+            item_assets: list[AssetRecord] = []
+            validation_ok = _item_passed_validation(result, i)
+
             for img in result.get("generated_images", []):
-                all_assets.append(AssetRecord(
+                item_assets.append(AssetRecord(
                     item_index=i,
                     asset_type="image",
                     s3_key=img.get("s3_key", ""),
                     file_format=img.get("format", "png"),
-                    validation_passed=_item_passed_validation(result, i),
+                    validation_passed=validation_ok,
                     generation_cost_usd=item_cost,
                 ))
             for vid in result.get("generated_videos", []):
-                all_assets.append(AssetRecord(
+                item_assets.append(AssetRecord(
                     item_index=i,
                     asset_type="video",
                     s3_key=vid.get("s3_key", ""),
                     file_format="mp4",
-                    validation_passed=_item_passed_validation(result, i),
+                    validation_passed=validation_ok,
                     generation_cost_usd=item_cost,
                 ))
             if result.get("generated_texts"):
                 root = "comments" if content_type == "comment" else ("posts" if content_type in ("post", "story") else "videos")
-                all_assets.append(AssetRecord(
+                item_assets.append(AssetRecord(
                     item_index=i,
                     asset_type="text",
                     s3_key=f"{root}/{task_id}/{platform}/item_{i}/content.json",
                     file_format="json",
-                    validation_passed=_item_passed_validation(result, i),
+                    validation_passed=validation_ok,
                     generation_cost_usd=item_cost,
+                    content=result.get("generated_texts"),
                 ))
+
+            all_assets.extend(item_assets)
+            await task_store.add_assets(task_id, item_assets)
             await task_store.update(task_id, items_completed=_completed_count)
 
     # ------------------------------------------------------------------

@@ -57,19 +57,64 @@ def _get_video_dimensions(video_path: pathlib.Path) -> tuple[int, int]:
     return 720, 1280
 
 
+def _probe_clip_duration(path: pathlib.Path) -> float:
+    """Return actual duration of a video file in seconds via ffprobe."""
+    import static_ffmpeg
+    import shutil
+    static_ffmpeg.add_paths()
+
+    ffprobe_exe = shutil.which("ffprobe")
+    if not ffprobe_exe:
+        return 0.0
+
+    cmd = [
+        ffprobe_exe, "-v", "quiet",
+        "-print_format", "json",
+        "-show_format",
+        str(path),
+    ]
+    result = subprocess.run(
+        cmd, capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
+        cwd=str(path.parent),
+    )
+    try:
+        data = json.loads(result.stdout)
+        return float(data["format"]["duration"])
+    except Exception:
+        return 0.0
+
+
+def _wrap_ass_text(text: str, max_chars: int = 35) -> str:
+    """Split text into lines of max_chars, joined with ASS line-break \\N."""
+    words = text.split()
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        candidate = f"{current} {word}".strip() if current else word
+        if len(candidate) <= max_chars:
+            current = candidate
+        else:
+            if current:
+                lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    return r"\N".join(lines)
+
+
 def _build_ass_content(
     scenes: list[dict],
-    initial_duration: int,
-    extend_duration: int,
+    scene_durations: list[float],
     width: int = 720,
     height: int = 1280,
+    lang: str = "he",
 ) -> str:
-    """Build ASS subtitle file with Hebrew RTL captions — auto word wrap."""
+    """Build ASS subtitle file timed to actual clip durations — RTL for Hebrew, LTR for English."""
 
-    # גודל גופן יחסי לרוחב — ~5% מהרוחב
     font_size = max(38, int(width * 0.064))
-    margin_h  = int(width * 0.055)   # margin אופקי — ~5.5% מהרוחב
-    margin_v  = int(height * 0.10)  # margin אנכי — ~4.7% מהגובה
+    margin_h  = int(width * 0.055)
+    margin_v  = int(height * 0.10)
 
     header = (
         "[Script Info]\n"
@@ -83,17 +128,17 @@ def _build_ass_content(
         "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
         f"Style: Hebrew,Arial,{font_size},"
-        f"&H00FFFFFF,"    # PrimaryColour — טקסט לבן
-        f"&H00FFFFFF,"    # SecondaryColour
-        f"&H00000000,"    # OutlineColour — שחור
-        f"&H99000000,"    # BackColour — רקע שחור 60% שקיפות
-        f"1,0,0,0,"       # Bold, Italic, Underline, StrikeOut
-        f"100,100,0,0,"   # ScaleX, ScaleY, Spacing, Angle
-        f"4,"             # BorderStyle: 4 = רקע מלא
-        f"0,0,"           # Outline, Shadow
-        f"2,"             # Alignment: 2 = bottom center
-        f"{margin_h},{margin_h},{margin_v},"  # MarginL, MarginR, MarginV
-        f"177\n\n"        # Encoding
+        f"&H00FFFFFF,"
+        f"&H00FFFFFF,"
+        f"&H00000000,"
+        f"&H99000000,"
+        f"1,0,0,0,"
+        f"100,100,0,0,"
+        f"4,"
+        f"0,0,"
+        f"2,"
+        f"{margin_h},{margin_h},{margin_v},"
+        f"177\n\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
@@ -101,13 +146,25 @@ def _build_ass_content(
     current_time = 0.0
 
     for i, scene in enumerate(scenes):
-        duration = initial_duration if i == 0 else extend_duration
+        duration = scene_durations[i] if i < len(scene_durations) else 7.0
         start    = current_time
         end      = current_time + duration - 0.3
 
-        caption = scene.get("caption_text", "")
+        # Use narrator_text — the exact words the voice says on screen
+        caption = scene.get("narrator_text", "")
+        if not caption:
+            # fallback to legacy caption fields
+            caption = scene.get("caption_text" if lang != "en" else "caption_text_en", "")
+
         if caption:
-            rtl_text = f"{{\\an2}}{{\\q2}}{caption}"
+            # replace dashes with comma so captions match the sanitized TTS voice
+            import re
+            caption = re.sub(r"\s*[—–]\s*", ", ", caption)
+            caption = re.sub(r"(\w)\s*-\s*(\w)", r"\1, \2", caption)
+            # wrap long lines at ~35 chars to keep captions readable
+            wrapped = _wrap_ass_text(caption, max_chars=35)
+            alignment = "{\\an2}{\\q2}" if lang == "he" else "{\\an2}"
+            rtl_text = f"{alignment}{wrapped}"
             events += (
                 f"Dialogue: 0,{_seconds_to_ass_time(start)},"
                 f"{_seconds_to_ass_time(end)},Hebrew,,0,0,0,,{rtl_text}\n"
@@ -118,29 +175,156 @@ def _build_ass_content(
     return header + events
 
 
-async def burn_hebrew_captions(
+async def mix_tts_voice(
+    video_bytes: bytes,
+    tts_segments: list[bytes],
+    scene_durations: list[float],
+    music_volume: float = 0.25,
+    task_id: str = "",
+    item_index: int = -1,
+) -> bytes:
+    """Mix Google TTS voice segments (timed per scene) with Veo background music."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None,
+        _sync_mix_tts_voice,
+        video_bytes,
+        tts_segments,
+        scene_durations,
+        music_volume,
+        task_id,
+        item_index,
+    )
+
+
+def _sync_mix_tts_voice(
+    video_bytes: bytes,
+    tts_segments: list[bytes],
+    scene_durations: list[float],
+    music_volume: float = 0.25,
+    task_id: str = "",
+    item_index: int = -1,
+) -> bytes:
+    import static_ffmpeg
+    import shutil
+    static_ffmpeg.add_paths()
+
+    ffmpeg_exe = shutil.which("ffmpeg")
+    if not ffmpeg_exe:
+        raise RuntimeError("FFmpeg not found")
+
+    tmp_dir = pathlib.Path("C:/tmp/ffmpeg_work")
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    prefix = f"[{task_id}] item_{item_index}" if task_id else "FFmpeg-TTS"
+
+    # ── שלב 1: כתוב כל סגמנט TTS לקובץ ──
+    tts_paths: list[pathlib.Path] = []
+    for i, seg in enumerate(tts_segments):
+        p = tmp_dir / f"tts_{i}.mp3"
+        p.write_bytes(seg)
+        tts_paths.append(p)
+
+    # ── שלב 2: בנה voice track — כל סגמנט עם adelay לפי זמן הסצנה ──
+    inputs: list[str] = []
+    for p in tts_paths:
+        inputs += ["-i", p.name]
+
+    accumulated_ms = 0.0
+    delay_filters: list[str] = []
+    for i, (dur, _) in enumerate(zip(scene_durations, tts_paths)):
+        delay_ms = int(accumulated_ms)
+        delay_filters.append(f"[{i}:a]adelay={delay_ms}|{delay_ms}[tts{i}]")
+        accumulated_ms += dur * 1000
+
+    n = len(tts_paths)
+    mix_inputs = "".join(f"[tts{i}]" for i in range(n))
+    delay_filters.append(
+        f"{mix_inputs}amix=inputs={n}:duration=longest:normalize=0[voice]"
+    )
+
+    voice_path = tmp_dir / "voice_track.mp3"
+    cmd_voice = (
+        [ffmpeg_exe, "-y"]
+        + inputs
+        + ["-filter_complex", ";".join(delay_filters), "-map", "[voice]", voice_path.name]
+    )
+    proc = subprocess.run(
+        cmd_voice, cwd=str(tmp_dir),
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    if proc.returncode != 0:
+        logger.error("%s · voice track build failed: %s", prefix, proc.stderr[-500:])
+        raise RuntimeError(f"TTS voice track failed:\n{proc.stderr[-300:]}")
+
+    # ── שלב 3: ערבב מוזיקת Veo (נמוכה) + קול TTS ──
+    video_path  = tmp_dir / "tts_input.mp4"
+    output_path = tmp_dir / "tts_output.mp4"
+    video_path.write_bytes(video_bytes)
+
+    filter_mix = (
+        f"[0:a]volume={music_volume}[music];"
+        f"[1:a]volume=1.0[voice];"
+        f"[music][voice]amix=inputs=2:duration=first:normalize=0[aout]"
+    )
+    cmd_mix = [
+        ffmpeg_exe, "-y",
+        "-i", video_path.name,
+        "-i", voice_path.name,
+        "-filter_complex", filter_mix,
+        "-map", "0:v",
+        "-map", "[aout]",
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        output_path.name,
+    ]
+    proc = subprocess.run(
+        cmd_mix, cwd=str(tmp_dir),
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    if proc.returncode != 0:
+        logger.error("%s · TTS mix failed: %s", prefix, proc.stderr[-500:])
+        raise RuntimeError(f"TTS mix failed:\n{proc.stderr[-300:]}")
+
+    result = output_path.read_bytes()
+    logger.info("%s · TTS mix done → %d bytes", prefix, len(result))
+
+    for f in tts_paths + [voice_path, video_path, output_path]:
+        try: f.unlink()
+        except Exception: pass
+
+    return result
+
+
+async def burn_captions(
     video_bytes: bytes,
     scenes: list[dict],
-    initial_duration: int,
-    extend_duration: int,
+    scene_durations: list[float],
+    lang: str = "he",
+    task_id: str = "",
+    item_index: int = -1,
 ) -> bytes:
-    """Burn Hebrew RTL captions into video using FFmpeg + libass."""
+    """Burn captions into video using FFmpeg + libass, timed to actual clip durations."""
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None,
         _sync_burn,
         video_bytes,
         scenes,
-        initial_duration,
-        extend_duration,
+        scene_durations,
+        lang,
+        task_id,
+        item_index,
     )
 
 
 def _sync_burn(
     video_bytes: bytes,
     scenes: list[dict],
-    initial_duration: int,
-    extend_duration: int,
+    scene_durations: list[float],
+    lang: str = "he",
+    task_id: str = "",
+    item_index: int = -1,
 ) -> bytes:
     import static_ffmpeg
     import shutil
@@ -159,11 +343,9 @@ def _sync_burn(
 
     input_path.write_bytes(video_bytes)
 
-    # קרא רזולוציה מהוידאו
     width, height = _get_video_dimensions(input_path)
 
-    # בנה ASS עם רזולוציה נכונה
-    ass_content = _build_ass_content(scenes, initial_duration, extend_duration, width, height)
+    ass_content = _build_ass_content(scenes, scene_durations, width, height, lang)
     ass_path.write_text(ass_content, encoding="utf-8")
 
     cmd = [
@@ -177,8 +359,9 @@ def _sync_burn(
         "output.mp4",
     ]
 
-    logger.info("FFmpeg: burning Hebrew captions (%dx%d font=%d)",
-                width, height, max(28, int(width * 0.052)))
+    prefix = f"[{task_id}] item_{item_index}" if task_id else "FFmpeg"
+    logger.info("%s · burning %s captions (%dx%d) scene_durations=%s",
+                prefix, lang, width, height, scene_durations)
 
     proc = subprocess.run(
         cmd,
@@ -190,11 +373,11 @@ def _sync_burn(
     )
 
     if proc.returncode != 0:
-        logger.error("FFmpeg stderr: %s", proc.stderr[-2000:])
+        logger.error("%s · FFmpeg stderr: %s", prefix, proc.stderr[-2000:])
         raise RuntimeError(f"FFmpeg failed:\n{proc.stderr[-500:]}")
 
     output_bytes = output_path.read_bytes()
-    logger.info("FFmpeg: done %d → %d bytes", len(video_bytes), len(output_bytes))
+    logger.info("%s · captions burned %d → %d bytes", prefix, len(video_bytes), len(output_bytes))
 
     for f in [input_path, ass_path, output_path]:
         try:
@@ -208,8 +391,11 @@ async def download_and_merge_clips(
     project_id: str,
     initial_duration: int,
     extend_duration: int,
-) -> bytes:
-    """הורד קליפי Veo, חתוך כל אחד לחלק החדש שלו, חבר עם audio crossfade."""
+    task_id: str = "",
+    item_index: int = -1,
+) -> tuple[bytes, list[float]]:
+    """הורד קליפי Veo, חתוך כל אחד לחלק החדש שלו, חבר עם audio crossfade.
+    Returns (merged_bytes, scene_durations) — actual probed duration per scene."""
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None,
@@ -218,6 +404,8 @@ async def download_and_merge_clips(
         project_id,
         initial_duration,
         extend_duration,
+        task_id,
+        item_index,
     )
 
 
@@ -226,6 +414,8 @@ def _sync_merge_clips(
     project_id: str,
     initial_duration: int,
     extend_duration: int,
+    task_id: str = "",
+    item_index: int = -1,
 ) -> bytes:
     import static_ffmpeg
     import shutil
@@ -240,6 +430,7 @@ def _sync_merge_clips(
     tmp_dir = pathlib.Path("C:/tmp/ffmpeg_work")
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
+    prefix = f"[{task_id}] item_{item_index}" if task_id else "FFmpeg"
     client = gcs.Client(project=project_id)
 
     # ------------------------------------------------------------------
@@ -250,7 +441,7 @@ def _sync_merge_clips(
         bucket_name = uri.split("/")[2]
         blob_name   = "/".join(uri.split("/")[3:])
         clip_path   = tmp_dir / f"clip_{i}.mp4"
-        logger.info("Downloading clip %d/%d: %s", i + 1, len(gcs_uris), uri)
+        logger.info("%s · downloading clip %d/%d: %s", prefix, i + 1, len(gcs_uris), uri)
 
         # retry — I2V עלול להיות לא מוכן מיידית ב-GCS
         for attempt in range(5):
@@ -259,8 +450,8 @@ def _sync_merge_clips(
             if size > 10_000:  # קובץ תקין
                 break
             logger.warning(
-                "Clip %d too small (%d bytes) — waiting 5s, retry %d/5",
-                i + 1, size, attempt + 1,
+                "%s · clip %d too small (%d bytes) — waiting 5s, retry %d/5",
+                prefix, i + 1, size, attempt + 1,
             )
             time.sleep(5)
         else:
@@ -271,12 +462,11 @@ def _sync_merge_clips(
     # ------------------------------------------------------------------
     # שלב 2 — חתוך כל קליפ לחלק החדש שלו
     # ------------------------------------------------------------------
-    trimmed_paths = []
-    accumulated   = 0.0
+    trimmed_paths  = []
+    scene_durations: list[float] = []
+    accumulated    = 0.0
 
     for i, clip_path in enumerate(clip_paths):
-        # הקליפ האחרון (I2V) עשוי להיות 8s במקום extend_duration
-        # נחתוך לפי מה שיש בפועל — לא לפי duration מוגדר
         is_last = (i == len(clip_paths) - 1)
         duration = initial_duration if i == 0 else extend_duration
         start    = accumulated
@@ -313,12 +503,20 @@ def _sync_merge_clips(
         )
 
         if proc.returncode != 0:
-            logger.error("FFmpeg trim error clip %d: %s", i, proc.stderr[-500:])
+            logger.error("%s · FFmpeg trim error clip %d: %s", prefix, i, proc.stderr[-500:])
             raise RuntimeError(f"FFmpeg trim failed for clip {i}")
 
         trimmed_paths.append(trimmed)
+
+        # probe actual trimmed duration for accurate caption sync
+        actual_dur = _probe_clip_duration(trimmed)
+        if actual_dur <= 0:
+            actual_dur = float(duration)
+        scene_durations.append(actual_dur)
+
         accumulated += duration
-        logger.info("Trimmed clip %d: %.1fs → %.1fs", i, start, start + duration)
+        logger.info("%s · trimmed clip %d: %.1fs → %.1fs (actual=%.2fs)",
+                    prefix, i, start, start + duration, actual_dur)
 
     # ------------------------------------------------------------------
     # שלב 3 — חבר: video hard cut + audio crossfade
@@ -349,28 +547,16 @@ def _sync_merge_clips(
         video_inputs = "".join(f"[v{i}]" for i in range(n))
         filter_parts.append(f"{video_inputs}concat=n={n}:v=1:a=0[vout]")
 
-        # אודיו: acrossfade בשרשרת
-       # אודיו: acrossfade בין clips 0-2, clip 4 (I2V) מקבל המשך אודיו מclip 3
-        if n == 2:
+        # אודיו: acrossfade בשרשרת — כל הקליפים מחוברים
+        first_out = "aout" if n == 2 else "atmp1"
+        filter_parts.append(
+            f"[0:a][1:a]acrossfade=d=0.4:c1=tri:c2=tri[{first_out}]"
+        )
+        for j in range(2, n):
+            prev = "atmp1" if j == 2 else f"atmp{j - 1}"
+            out  = "aout"  if j == n - 1 else f"atmp{j}"
             filter_parts.append(
-                f"[0:a][1:a]acrossfade=d=0.4:c1=tri:c2=tri[aout]"
-            )
-        elif n == 3:
-            filter_parts.append(
-                f"[0:a][1:a]acrossfade=d=0.4:c1=tri:c2=tri[tmp1]"
-            )
-            filter_parts.append(
-                f"[tmp1][2:a]acrossfade=d=0.4:c1=tri:c2=tri[aout]"
-            )
-        else:
-            filter_parts.append(
-                f"[0:a][1:a]acrossfade=d=0.4:c1=tri:c2=tri[tmp1]"
-            )
-            filter_parts.append(
-                f"[tmp1][2:a]acrossfade=d=0.4:c1=tri:c2=tri[tmp2]"
-            )
-            filter_parts.append(
-                f"[tmp2]apad=pad_dur=10[aout]"
+                f"[{prev}][{j}:a]acrossfade=d=0.4:c1=tri:c2=tri[{out}]"
             )
 
         filter_complex = ";".join(filter_parts)
@@ -389,8 +575,8 @@ def _sync_merge_clips(
         ]
 
         logger.info(
-            "FFmpeg: merging %d clips — video=hard_cut audio=crossfade(0.4s)",
-            n,
+            "%s · merging %d clips — video=hard_cut audio=crossfade(0.4s)",
+            prefix, n,
         )
         proc = subprocess.run(
             cmd, cwd=str(tmp_dir),
@@ -399,21 +585,20 @@ def _sync_merge_clips(
         )
 
     if proc.returncode != 0:
-        logger.error("FFmpeg merge error: %s", proc.stderr[-2000:])
+        logger.error("%s · FFmpeg merge error: %s", prefix, proc.stderr[-2000:])
         raise RuntimeError(f"FFmpeg merge failed:\n{proc.stderr[-500:]}")
 
     result = output_path.read_bytes()
     logger.info(
-        "Merged %d clips — video hard_cut + audio crossfade → %d bytes",
-        n, len(result),
+        "%s · merged %d clips — video hard_cut + audio crossfade → %d bytes | scene_durations=%s",
+        prefix, n, len(result), scene_durations,
     )
 
-    # ניקוי
     for f in clip_paths + trimmed_paths + [output_path]:
         try: f.unlink()
         except Exception: pass
 
-    return result
+    return result, scene_durations
 
 def extract_last_frame(video_bytes: bytes) -> bytes:
     """חותך את הframe האחרון מהוידאו ומחזיר PNG bytes."""

@@ -24,7 +24,7 @@ function GhostButton({ children, onClick }: { children: React.ReactNode; onClick
 
 export function NewTaskPage() {
   const [contentType, setContentType] = useState<ContentType>('comment');
-  const [quantity, setQuantity] = useState(10);
+  const [quantity, setQuantity] = useState(2);
 
   return (
     <>

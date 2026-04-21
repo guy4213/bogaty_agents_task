@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Path
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings
@@ -81,6 +82,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 # ---------------------------------------------------------------------------
 # Input validation — max quantity per content_type based on API capacity
@@ -124,12 +133,13 @@ async def generate(request: GenerateRequest, background_tasks: BackgroundTasks):
     )
 
     logger.info(
-        "Task created: id=%s platform=%s type=%s lang=%s qty=%d",
+        "Task created: id=%s platform=%s type=%s lang=%s qty=%d description=%s",
         record.task_id,
         record.platform,
         record.content_type,
         record.language,
         record.quantity,
+        record.description  
     )
 
     # Fire-and-forget in background
@@ -174,6 +184,7 @@ async def get_task(task_id: str = Path(..., description="Task UUID")):
         status=record.status,
         platform=record.platform,
         content_type=record.content_type,
+        description=record.description,
         quantity_requested=record.quantity,
         quantity_delivered=record.items_completed,
         quantity_failed=record.items_failed,
@@ -277,7 +288,44 @@ async def get_task_content(task_id: str = Path(...)):
         return {"task_id": task_id, "status": "pending", "message": "Task not started yet"}
 
     if record.status.value == "processing":
-        return {"task_id": task_id, "status": "processing", "message": "Still running, try again shortly"}
+        assets_out = []
+        for asset in record.partial_assets:
+            entry = {
+                "item_index": asset.item_index,
+                "asset_type": asset.asset_type,
+                "file_format": asset.file_format,
+                "s3_key": asset.s3_key,
+                "validation_passed": asset.validation_passed,
+            }
+            if asset.file_format in ("json", "txt") or asset.asset_type in ("text", "caption"):
+                if asset.content is not None:
+                    entry["content"] = asset.content
+                else:
+                    content = await _read_asset_text(asset.s3_key)
+                    if content:
+                        try:
+                            import json as _json
+                            entry["content"] = _json.loads(content)
+                        except Exception:
+                            entry["content"] = content
+            else:
+                try:
+                    from app.services.s3_client import presigned_url
+                    entry["download_url"] = await presigned_url(asset.s3_key, expiry_sec=3600)
+                except Exception:
+                    entry["download_url"] = None
+            assets_out.append(entry)
+        return {
+            "task_id": task_id,
+            "status": "processing",
+            "platform": record.platform,
+            "content_type": record.content_type,
+            "language": record.language,
+            "quantity_requested": record.quantity,
+            "quantity_delivered": record.items_completed,
+            "total_cost_usd": record.total_cost_usd,
+            "assets": assets_out,
+        }
 
     if not record.manifest_s3_key:
         raise HTTPException(status_code=404, detail="Manifest not yet available")
@@ -302,15 +350,19 @@ async def get_task_content(task_id: str = Path(...)):
             "validation_passed": asset.get("validation_passed"),
         }
 
-        # For text/json assets — inline the actual content
+        # For text/json assets — use inline content from manifest, fall back to S3 read
         if file_format in ("json", "txt") or asset_type in ("text", "caption"):
-            content = await _read_asset_text(s3_key)
-            if content:
-                try:
-                    import json as _json
-                    entry["content"] = _json.loads(content)
-                except Exception:
-                    entry["content"] = content
+            inline = asset.get("content")
+            if inline is not None:
+                entry["content"] = inline
+            else:
+                content = await _read_asset_text(s3_key)
+                if content:
+                    try:
+                        import json as _json
+                        entry["content"] = _json.loads(content)
+                    except Exception:
+                        entry["content"] = content
 
         # For binary assets — generate a download URL
         else:

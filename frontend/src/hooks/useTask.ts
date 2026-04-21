@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getTask, getTaskContent } from '@/lib/api';
 import { queryKeys } from '@/lib/queryKeys';
@@ -9,13 +10,27 @@ function isTerminal(status: string | undefined): boolean {
   return status ? TERMINAL.has(status) : false;
 }
 
+// Stepped backoff: fast start → slow cruise for long-running video tasks
+function backoffMs(pollCount: number): number {
+  if (pollCount < 5)  return 2_000;   // 0–10 s   → every 2 s  (catches fast state changes)
+  if (pollCount < 14) return 5_000;   // 10–55 s  → every 5 s
+  if (pollCount < 22) return 10_000;  // 55–135 s → every 10 s (most tasks finish here)
+  return 20_000;                       // 135 s+   → every 20 s (long video jobs)
+}
+
 export function useTask(taskId: string) {
+  const statusPollCount  = useRef(0);
+  const contentPollCount = useRef(0);
+
   const statusQuery = useQuery<TaskStatusResponse>({
     queryKey: queryKeys.task(taskId),
-    queryFn: () => getTask(taskId),
+    queryFn: () => {
+      statusPollCount.current += 1;
+      return getTask(taskId);
+    },
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      return isTerminal(status) ? false : 2000;
+      return isTerminal(status) ? false : backoffMs(statusPollCount.current);
     },
     enabled: Boolean(taskId),
   });
@@ -23,17 +38,16 @@ export function useTask(taskId: string) {
   const contentQuery = useQuery<TaskContentResponse | null>({
     queryKey: queryKeys.taskContent(taskId),
     queryFn: async () => {
+      contentPollCount.current += 1;
       const result = await getTaskContent(taskId);
       if ('message' in result) return null;
       return result as TaskContentResponse;
     },
-    refetchInterval: (query) => {
+    refetchInterval: () => {
       const status = statusQuery.data?.status;
-      if (isTerminal(status)) return false;
-      if (query.state.data === null) return 3000;
-      return false;
+      return isTerminal(status) ? false : backoffMs(contentPollCount.current);
     },
-    enabled: Boolean(taskId) && !isTerminal('pending'),
+    enabled: Boolean(taskId),
     retry: 1,
   });
 

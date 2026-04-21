@@ -2,15 +2,18 @@ import type { AssetRecord } from '@/types/api';
 import { ReelCard } from './ReelCard';
 
 interface ReelsGridProps { assets: AssetRecord[]; isProcessing: boolean; }
-interface ReelGroup { itemIndex: number; videoAsset: AssetRecord | undefined; }
+interface ReelGroup { itemIndex: number; videoAsset: AssetRecord | undefined; textAsset: AssetRecord | undefined; }
 
 function groupReels(assets: AssetRecord[]): ReelGroup[] {
   const map = new Map<number, ReelGroup>();
   for (const asset of assets) {
     const idx = asset.item_index;
-    if (!map.has(idx)) map.set(idx, { itemIndex: idx, videoAsset: undefined });
+    if (!map.has(idx)) map.set(idx, { itemIndex: idx, videoAsset: undefined, textAsset: undefined });
+    const group = map.get(idx)!;
     if (asset.asset_type === 'video' || asset.file_format === 'mp4') {
-      map.get(idx)!.videoAsset = asset;
+      group.videoAsset = asset;
+    } else if (asset.asset_type === 'text' || asset.file_format === 'json' || asset.file_format === 'txt') {
+      group.textAsset = asset;
     }
   }
   return Array.from(map.values()).sort((a, b) => a.itemIndex - b.itemIndex);
@@ -32,6 +35,7 @@ export function ReelsGrid({ assets, isProcessing }: ReelsGridProps) {
           key={group.itemIndex}
           itemIndex={group.itemIndex}
           videoAsset={group.videoAsset}
+          textAsset={group.textAsset}
           completedExtends={group.videoAsset ? 4 : 0}
           isProcessing={isProcessing && !group.videoAsset}
         />

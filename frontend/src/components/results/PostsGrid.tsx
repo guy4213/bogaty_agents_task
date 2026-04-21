@@ -1,7 +1,7 @@
 import type { AssetRecord } from '@/types/api';
 import { PostCard } from './PostCard';
 
-interface PostsGridProps { assets: AssetRecord[]; aspect: '1:1' | '9:16'; }
+interface PostsGridProps { assets: AssetRecord[]; aspect: '1:1' | '9:16' | '16:9'; }
 interface ItemGroup { itemIndex: number; imageAsset: AssetRecord | undefined; captionAsset: AssetRecord | undefined; }
 
 function groupByItem(assets: AssetRecord[]): ItemGroup[] {

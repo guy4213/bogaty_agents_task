@@ -1,6 +1,5 @@
 'use client';
 
-import { use } from 'react';
 import Link from 'next/link';
 import { useTask } from '@/hooks/useTask';
 import { Topbar } from '@/components/Topbar';
@@ -18,11 +17,11 @@ const STATUS_BADGE: Record<string, { label: string; color: string; bg: string }>
 };
 
 interface PageProps {
-  params: Promise<{ taskId: string }>;
+  params: { taskId: string };
 }
 
 export default function TaskDetailPage({ params }: PageProps) {
-  const { taskId } = use(params);
+  const { taskId } = params;
   const { status: statusQuery, content: contentQuery, isLoading } = useTask(taskId);
 
   if (isLoading) {
@@ -88,6 +87,18 @@ export default function TaskDetailPage({ params }: PageProps) {
           </span>
         </div>
 
+        {/* Description */}
+        {task.description && (
+          <section>
+            <p className="text-[10px] font-semibold uppercase tracking-widest mb-2" style={{ color: 'var(--fg3)' }}>
+              Brief
+            </p>
+            <p className="text-[13px] leading-relaxed" style={{ color: 'var(--fg2)' }}>
+              {task.description}
+            </p>
+          </section>
+        )}
+
         {/* Pipeline */}
         <section>
           <p className="text-[10px] font-semibold uppercase tracking-widest mb-3" style={{ color: 'var(--fg3)' }}>
@@ -132,6 +143,7 @@ export default function TaskDetailPage({ params }: PageProps) {
             </p>
             <ResultGallery
               contentType={task.content_type}
+              platform={task.platform}
               assets={content.assets}
               isProcessing={isProcessing}
             />

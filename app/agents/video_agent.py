@@ -7,29 +7,31 @@ from app.config import get_settings
 from app.graph.state import ContentEngineState
 from app.services.gemini_client import generate_video_initial, extend_video, download_video,generate_video_from_frame
 from app.services.s3_client import upload_bytes, asset_key, upload_text
-from app.services.caption_service import extract_last_frame  
+from app.services.caption_service import extract_last_frame
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_narrator(text: str) -> str:
+    """Remove dashes that cause Veo TTS to insert filler words."""
+    import re
+    # em-dash and en-dash → comma+space; plain hyphen between words → comma+space
+    text = re.sub(r"\s*[—–]\s*", ", ", text)
+    text = re.sub(r"(\w)\s*-\s*(\w)", r"\1, \2", text)
+    # collapse multiple commas/spaces
+    text = re.sub(r",\s*,", ",", text)
+    return text.strip()
 
 
 def _build_initial_prompt(scene: dict, lang: str, visual_style: str = "", canonical_subject: str = "") -> str:
     visual      = scene.get("visual_description", "")
     audio_mood  = scene.get("audio_mood", "ambient sounds")
+    narrator    = _sanitize_narrator(scene.get("narrator_text", ""))
     style_anchor = f" Visual style: {visual_style}." if visual_style else ""
     subject_lock = (
         f" CANONICAL SUBJECT FOR THIS ENTIRE VIDEO: [{canonical_subject}]."
         f" Establish this exact subject clearly in the opening frame."
     ) if canonical_subject else ""
-
-    if lang == "en":
-        caption = scene.get("caption_text_en", "")
-        caption_instruction = (
-            f' Render burnt-in subtitle text at the bottom of the frame: "{caption}".'
-            if caption else ""
-        )
-    else:
-        caption_instruction = " No text overlays."
-
     return (
         f"{visual}.{style_anchor}{subject_lock}"
         f" Camera framing: medium shot with subject fully visible and centered."
@@ -38,9 +40,9 @@ def _build_initial_prompt(scene: dict, lang: str, visual_style: str = "", canoni
         f" IMPORTANT: This is a self-contained scene."
         f" Do NOT anticipate or begin any next action."
         f" The scene ends exactly as described — no transitions, no preparation for what comes next."
-        f"{caption_instruction} "
-        f"Audio: {audio_mood}. "
-        f"9:16 vertical format, 1080x1920, cinematic videography, "
+        f" No text overlays."
+        f" Audio: {audio_mood}. No voice-over — music and ambient sounds only."
+        f" 9:16 vertical format, 1080x1920, cinematic videography, "
         f"professional grade."
     )
 
@@ -92,13 +94,8 @@ def _build_extend_prompt(
     audio_instruction = (
         f" Continue audio: {audio_mood}."
         f" SAME music genre and energy as previous scene."
-    ) if audio_mood else ""
-
-    if lang == "en":
-        caption = scene.get("caption_text_en", "")
-        caption_instruction = f' Subtitle at bottom: "{caption}".' if caption else ""
-    else:
-        caption_instruction = " No text overlays."
+        f" No voice-over — music and ambient sounds only."
+    ) if audio_mood else " No voice-over — music and ambient sounds only."
 
     # Open journeys (travel, real estate) may change location between scenes
     is_open = content_category not in ("food", "fitness", "technology", "")
@@ -117,7 +114,7 @@ def _build_extend_prompt(
         f" Subject must be 100% in frame at all times."
         f"{location_instruction}"
         f"{audio_instruction}"
-        f"{caption_instruction} "
+        f" No text overlays."
     )
 
 
@@ -143,13 +140,8 @@ def _build_payoff_prompt(
     audio_instruction = (
         f" Continue audio: {audio_mood}."
         f" Same genre, slower and more cinematic energy — this is the final scene."
-    ) if audio_mood else ""
-
-    if lang == "en":
-        caption = scene.get("caption_text_en", "")
-        caption_instruction = f' Subtitle at bottom: "{caption}".' if caption else ""
-    else:
-        caption_instruction = " No text overlays."
+        f" No voice-over — music and ambient sounds only."
+    ) if audio_mood else " No voice-over — music and ambient sounds only."
 
     return (
             f"FINAL SCENE — everything is complete. No more actions.{style_anchor}{subject_lock}"
@@ -162,8 +154,8 @@ def _build_payoff_prompt(
             f" Subject fully visible, centered, 100% in frame."
             f" SAME location, SAME lighting as previous scene."
             f"{audio_instruction}"
-            f"{caption_instruction} "
-            f"9:16 vertical format, 1080x1920, cinematic videography, professional grade."
+            f" No text overlays."
+            f" 9:16 vertical format, 1080x1920, cinematic videography, professional grade."
         )
 
 async def _download_single_clip(gcs_uri: str, project_id: str) -> bytes:
@@ -230,7 +222,7 @@ async def run(state: ContentEngineState) -> dict:
     scenes: list[dict] = script.get("scenes", [])
 
     if not scenes:
-        logger.error("[%s] VideoAgent: no scenes found in generated_texts", task_id)
+        logger.error("[%s] item_%d · VideoAgent: no scenes found in generated_texts", task_id, item_index)
         raise ValueError("No scene data available for video generation")
 
     required_extends   = len(scenes) - 1
@@ -244,8 +236,8 @@ async def run(state: ContentEngineState) -> dict:
 
     if current_video_ref:
         logger.info(
-            "[%s] VideoAgent: RESUMING checkpoint — ref=%s extends=%d/%d",
-            task_id, current_video_ref, completed_extends, required_extends,
+            "[%s] item_%d · VideoAgent: RESUMING checkpoint — ref=%s extends=%d/%d",
+            task_id, item_index, current_video_ref, completed_extends, required_extends,
         )
     else:
         logger.info(
@@ -257,7 +249,7 @@ async def run(state: ContentEngineState) -> dict:
         current_video_ref = await generate_video_initial(initial_prompt)
         completed_extends = 0
         all_video_refs    = [current_video_ref]
-        logger.info("[%s] VideoAgent: initial clip ready — ref=%s", task_id, current_video_ref)
+        logger.info("[%s] item_%d · VideoAgent: initial clip ready — ref=%s", task_id, item_index, current_video_ref)
 
     # ------------------------------------------------------------------
     # Extend loop
@@ -271,21 +263,21 @@ async def run(state: ContentEngineState) -> dict:
                 scene, lang, visual_style, canonical_subject
             )
             logger.info(
-                "[%s] VideoAgent: extend %d/%d PAYOFF (image-to-video from Scene 1) scene=%d",
-                task_id, extend_idx + 1, required_extends,
+                "[%s] item_%d · VideoAgent: extend %d/%d PAYOFF (image-to-video from Scene 1) scene=%d",
+                task_id, item_index, extend_idx + 1, required_extends,
                 scene.get("scene", extend_idx + 2),
             )
 
             # ── Extract frame מScene 1 — consistency מושלמת ──
-            logger.info("[%s] VideoAgent: downloading Scene 1 for frame extraction", task_id)
+            logger.info("[%s] item_%d · VideoAgent: downloading Scene 1 for frame extraction", task_id, item_index)
             scene1_bytes = await _download_single_clip(
                 all_video_refs[0],  # ← ref של Scene 1 תמיד ראשון
                 cfg.vertex_project_id,
             )
             extracted_anchor_frame = extract_last_frame(scene1_bytes)
             logger.info(
-                "[%s] VideoAgent: scene 1 frame extracted (%d bytes)",
-                task_id, len(extracted_anchor_frame),
+                "[%s] item_%d · VideoAgent: scene 1 frame extracted (%d bytes)",
+                task_id, item_index, len(extracted_anchor_frame),
             )
 
             try:
@@ -297,11 +289,11 @@ async def run(state: ContentEngineState) -> dict:
                 completed_extends = extend_idx + 1
                 all_video_refs.append(current_video_ref)
                 logger.info(
-                    "[%s] VideoAgent: payoff done — ref=%s total_refs=%d",
-                    task_id, current_video_ref, len(all_video_refs),
+                    "[%s] item_%d · VideoAgent: payoff done — ref=%s total_refs=%d",
+                    task_id, item_index, current_video_ref, len(all_video_refs),
                 )
             except Exception as exc:
-                logger.error("[%s] VideoAgent: payoff FAILED (%s)", task_id, exc)
+                logger.error("[%s] item_%d · VideoAgent: payoff FAILED (%s)", task_id, item_index, exc)
                 raise _PartialVideoError(
                     str(exc),
                     current_video_ref=current_video_ref,
@@ -317,8 +309,8 @@ async def run(state: ContentEngineState) -> dict:
                 content_category=state.get("content_category", ""),
             )
             logger.info(
-                "[%s] VideoAgent: extend %d/%d scene=%d caption_en='%s'",
-                task_id, extend_idx + 1, required_extends,
+                "[%s] item_%d · VideoAgent: extend %d/%d scene=%d caption_en='%s'",
+                task_id, item_index, extend_idx + 1, required_extends,
                 scene.get("scene", extend_idx + 2),
                 scene.get("caption_text_en", "⚠️ MISSING"),
             )
@@ -332,14 +324,14 @@ async def run(state: ContentEngineState) -> dict:
                 completed_extends = extend_idx + 1
                 all_video_refs.append(current_video_ref)
                 logger.info(
-                    "[%s] VideoAgent: extend %d done — ref=%s total_refs=%d",
-                    task_id, completed_extends, current_video_ref, len(all_video_refs),
+                    "[%s] item_%d · VideoAgent: extend %d done — ref=%s total_refs=%d",
+                    task_id, item_index, completed_extends, current_video_ref, len(all_video_refs),
                 )
             except Exception as exc:
                 logger.error(
-                    "[%s] VideoAgent: extend %d FAILED (%s) — "
+                    "[%s] item_%d · VideoAgent: extend %d FAILED (%s) — "
                     "preserving state: completed_extends=%d ref=%s",
-                    task_id, extend_idx + 1, exc, completed_extends, current_video_ref,
+                    task_id, item_index, extend_idx + 1, exc, completed_extends, current_video_ref,
                 )
                 raise _PartialVideoError(
                     str(exc),
@@ -352,41 +344,86 @@ async def run(state: ContentEngineState) -> dict:
     # ------------------------------------------------------------------
     # Download + merge
     # ------------------------------------------------------------------
-    logger.info("[%s] VideoAgent: merging %d clips from GCS", task_id, len(all_video_refs))
+    logger.info("[%s] item_%d · VideoAgent: merging %d clips from GCS", task_id, item_index, len(all_video_refs))
+    scene_durations: list[float] = []
     if get_settings().dry_run:
         from app.mocks.mock_clients import mock_download_video
         video_bytes = await mock_download_video(all_video_refs[-1])
+        scene_durations = [float(cfg.veo_initial_duration_sec)] + [
+            float(cfg.veo_extend_duration_sec)
+        ] * required_extends
     else:
         from app.services.caption_service import download_and_merge_clips
-        video_bytes = await download_and_merge_clips(
+        video_bytes, scene_durations = await download_and_merge_clips(
             gcs_uris=all_video_refs,
             project_id=cfg.vertex_project_id,
             initial_duration=cfg.veo_initial_duration_sec,
             extend_duration=cfg.veo_extend_duration_sec,
+            task_id=task_id,
+            item_index=item_index,
         )
-    total_duration = cfg.veo_initial_duration_sec + required_extends * cfg.veo_extend_duration_sec
+    total_duration = sum(scene_durations) if scene_durations else (
+        cfg.veo_initial_duration_sec + required_extends * cfg.veo_extend_duration_sec
+    )
 
     # ------------------------------------------------------------------
-    # Burn Hebrew captions
+    # Google TTS voice track — mix with Veo background music
     # ------------------------------------------------------------------
-    if lang == "he":
-        logger.info("[%s] VideoAgent: burning Hebrew captions with FFmpeg", task_id)
-        if get_settings().dry_run:
-            from app.mocks.mock_clients import mock_burn_hebrew_captions
-            video_bytes = await mock_burn_hebrew_captions(
-                video_bytes, scenes,
-                cfg.veo_initial_duration_sec,
-                cfg.veo_extend_duration_sec,
-            )
-        else:
-            from app.services.caption_service import burn_hebrew_captions
-            video_bytes = await burn_hebrew_captions(
-                video_bytes=video_bytes,
-                scenes=scenes,
-                initial_duration=cfg.veo_initial_duration_sec,
-                extend_duration=cfg.veo_extend_duration_sec,
-            )
-        logger.info("[%s] VideoAgent: captions done", task_id)
+    if not get_settings().dry_run:
+        try:
+            import asyncio as _asyncio
+            from app.services.tts_service import synthesize
+            logger.info("[%s] item_%d · VideoAgent: synthesizing TTS for %d scenes lang=%s",
+                        task_id, item_index, len(scenes), lang)
+            raw_segments = await _asyncio.gather(*[
+                _asyncio.get_event_loop().run_in_executor(
+                    None, synthesize, _sanitize_narrator(s.get("narrator_text", "")), lang
+                )
+                for s in scenes
+            ])
+            # keep segments paired with their durations — skip empty ones
+            paired = [
+                (seg, dur) for seg, dur in zip(raw_segments, scene_durations) if seg
+            ]
+            if paired:
+                tts_segments, tts_durations = zip(*paired)
+                from app.services.caption_service import mix_tts_voice
+                video_bytes = await mix_tts_voice(
+                    video_bytes=video_bytes,
+                    tts_segments=list(tts_segments),
+                    scene_durations=list(tts_durations),
+                    music_volume=0.25,
+                    task_id=task_id,
+                    item_index=item_index,
+                )
+                logger.info("[%s] item_%d · VideoAgent: TTS mix done", task_id, item_index)
+        except Exception as exc:
+            logger.warning("[%s] item_%d · VideoAgent: TTS failed (%s) — keeping Veo audio",
+                           task_id, item_index, exc)
+
+    # ------------------------------------------------------------------
+    # Burn captions (FFmpeg — timed to actual clip durations)
+    # ------------------------------------------------------------------
+    logger.info("[%s] item_%d · VideoAgent: burning captions lang=%s with FFmpeg", task_id, item_index, lang)
+    if get_settings().dry_run:
+        from app.mocks.mock_clients import mock_burn_captions
+        video_bytes = await mock_burn_captions(
+            video_bytes, scenes,
+            cfg.veo_initial_duration_sec,
+            cfg.veo_extend_duration_sec,
+            lang=lang,
+        )
+    else:
+        from app.services.caption_service import burn_captions
+        video_bytes = await burn_captions(
+            video_bytes=video_bytes,
+            scenes=scenes,
+            scene_durations=scene_durations,
+            lang=lang,
+            task_id=task_id,
+            item_index=item_index,
+        )
+    logger.info("[%s] item_%d · VideoAgent: captions done", task_id, item_index)
 
     # ------------------------------------------------------------------
     # Upload to S3
