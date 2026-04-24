@@ -49,6 +49,16 @@ class Settings(BaseSettings):
 
     dry_run: bool = Field(default=False)  # ← NEW: skip all real API calls
 
+    # ── kie.ai / Kling (video generation) ─────────────────────────────────────
+    kie_api_key: str = Field(default="", env="KIE_API_KEY")
+    kie_api_base: str = Field(default="https://api.kie.ai", env="KIE_API_BASE")
+    kie_model_t2v: str = Field(default="kling/v2-1-master", env="KIE_MODEL_T2V")
+    kie_model_i2v: str = Field(default="kling/v2-1-master-image-to-video", env="KIE_MODEL_I2V")
+    kie_clip_duration: int = Field(default=10, env="KIE_CLIP_DURATION")   # 5 or 10
+    kie_poll_interval_sec: int = Field(default=5, env="KIE_POLL_INTERVAL_SEC")
+    kie_poll_timeout_sec: int = Field(default=300, env="KIE_POLL_TIMEOUT_SEC")
+    video_provider: str = Field(default="kling", env="VIDEO_PROVIDER")    # "kling" | "veo"
+
     log_level: str = Field(default="INFO")
 
 

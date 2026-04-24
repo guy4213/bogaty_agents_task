@@ -3,11 +3,28 @@ from asyncio import subprocess
 import logging
 import pathlib
 
-from app.config import get_settings
+from app.config import get_settings, get_settings as _get_settings_for_import
 from app.graph.state import ContentEngineState
-from app.services.gemini_client import generate_video_initial, extend_video, download_video,generate_video_from_frame
 from app.services.s3_client import upload_bytes, asset_key, upload_text
 from app.services.caption_service import extract_last_frame
+
+
+def _get_video_fns():
+    """Lazy import — returns (generate_video_initial, extend_video, generate_video_from_frame)."""
+    cfg = _get_settings_for_import()
+    if cfg.video_provider == "kling":
+        from app.services.kie_client import (
+            generate_video_initial,
+            extend_video,
+            generate_video_from_frame,
+        )
+    else:
+        from app.services.gemini_client import (
+            generate_video_initial,
+            extend_video,
+            generate_video_from_frame,
+        )
+    return generate_video_initial, extend_video, generate_video_from_frame
 
 logger = logging.getLogger(__name__)
 
@@ -158,19 +175,21 @@ def _build_payoff_prompt(
             f" 9:16 vertical format, 1080x1920, cinematic videography, professional grade."
         )
 
-async def _download_single_clip(gcs_uri: str, project_id: str) -> bytes:
-    """הורד קליפ בודד מ-GCS."""
-    from google.cloud import storage as gcs
+async def _download_single_clip(clip_ref: str, project_id: str) -> bytes:
+    """Download a single clip — GCS for Veo, S3 for Kling."""
     import asyncio
     loop = asyncio.get_event_loop()
-
-    def _dl():
-        client = gcs.Client(project=project_id)
-        bucket_name = gcs_uri.split("/")[2]
-        blob_name   = "/".join(gcs_uri.split("/")[3:])
-        return client.bucket(bucket_name).blob(blob_name).download_as_bytes()
-
-    return await loop.run_in_executor(None, _dl)
+    if clip_ref.startswith("gs://"):
+        from google.cloud import storage as gcs
+        def _dl():
+            client = gcs.Client(project=project_id)
+            bucket_name = clip_ref.split("/")[2]
+            blob_name   = "/".join(clip_ref.split("/")[3:])
+            return client.bucket(bucket_name).blob(blob_name).download_as_bytes()
+        return await loop.run_in_executor(None, _dl)
+    else:
+        from app.services.s3_client import _sync_download_bytes
+        return await loop.run_in_executor(None, _sync_download_bytes, clip_ref)
 
 
 async def _trim_clip_async(video_bytes: bytes, duration: float) -> bytes:
@@ -209,6 +228,7 @@ def _trim_clip_sync(video_bytes: bytes, duration: float) -> bytes:
     return result
 
 async def run(state: ContentEngineState) -> dict:
+    generate_video_initial, extend_video, generate_video_from_frame = _get_video_fns()
     cfg          = get_settings()
     task_id      = state["task_id"]
     item_index   = state["item_index"]
@@ -252,19 +272,20 @@ async def run(state: ContentEngineState) -> dict:
         all_video_refs    = [current_video_ref]
         logger.info("[%s] item_%d · VideoAgent: initial clip ready — ref=%s", task_id, item_index, current_video_ref)
 
-        # Pre-extract Scene 1 last frame to avoid re-download at payoff time
-        try:
-            _scene1_bytes = await _download_single_clip(current_video_ref, cfg.vertex_project_id)
-            scene1_frame_cache = extract_last_frame(_scene1_bytes)
-            logger.info(
-                "[%s] item_%d · VideoAgent: scene 1 frame cached (%d bytes)",
-                task_id, item_index, len(scene1_frame_cache),
-            )
-        except Exception as _cache_exc:
-            logger.warning(
-                "[%s] item_%d · VideoAgent: scene 1 frame cache failed (%s) — will download at payoff",
-                task_id, item_index, _cache_exc,
-            )
+        # Pre-extract Scene 1 last frame to avoid re-download at payoff time (skip in dry_run)
+        if not get_settings().dry_run:
+            try:
+                _scene1_bytes = await _download_single_clip(current_video_ref, cfg.vertex_project_id)
+                scene1_frame_cache = extract_last_frame(_scene1_bytes)
+                logger.info(
+                    "[%s] item_%d · VideoAgent: scene 1 frame cached (%d bytes)",
+                    task_id, item_index, len(scene1_frame_cache),
+                )
+            except Exception as _cache_exc:
+                logger.warning(
+                    "[%s] item_%d · VideoAgent: scene 1 frame cache failed (%s) — will download at payoff",
+                    task_id, item_index, _cache_exc,
+                )
 
     # ------------------------------------------------------------------
     # Extend loop
@@ -284,7 +305,9 @@ async def run(state: ContentEngineState) -> dict:
             )
 
             # ── Extract frame מScene 1 — consistency מושלמת ──
-            if scene1_frame_cache is not None:
+            if get_settings().dry_run:
+                extracted_anchor_frame = b""  # not used by mock generate_video_from_frame
+            elif scene1_frame_cache is not None:
                 extracted_anchor_frame = scene1_frame_cache
                 logger.info(
                     "[%s] item_%d · VideoAgent: scene 1 frame extracted (%d bytes)",
@@ -366,14 +389,28 @@ async def run(state: ContentEngineState) -> dict:
     # ------------------------------------------------------------------
     # Download + merge
     # ------------------------------------------------------------------
-    logger.info("[%s] item_%d · VideoAgent: merging %d clips from GCS", task_id, item_index, len(all_video_refs))
+    logger.info(
+        "[%s] item_%d · VideoAgent: merging %d clips (provider=%s)",
+        task_id, item_index, len(all_video_refs), cfg.video_provider,
+    )
     scene_durations: list[float] = []
     if get_settings().dry_run:
         from app.mocks.mock_clients import mock_download_video
         video_bytes = await mock_download_video(all_video_refs[-1])
-        scene_durations = [float(cfg.veo_initial_duration_sec)] + [
-            float(cfg.veo_extend_duration_sec)
-        ] * required_extends
+        if cfg.video_provider == "kling":
+            scene_durations = [float(cfg.kie_clip_duration)] * len(all_video_refs)
+        else:
+            scene_durations = [float(cfg.veo_initial_duration_sec)] + [
+                float(cfg.veo_extend_duration_sec)
+            ] * required_extends
+    elif cfg.video_provider == "kling":
+        from app.services.caption_service import download_and_merge_clips_s3
+        video_bytes, scene_durations = await download_and_merge_clips_s3(
+            s3_keys=all_video_refs,
+            clip_duration=cfg.kie_clip_duration,
+            task_id=task_id,
+            item_index=item_index,
+        )
     else:
         from app.services.caption_service import download_and_merge_clips
         video_bytes, scene_durations = await download_and_merge_clips(
@@ -388,7 +425,17 @@ async def run(state: ContentEngineState) -> dict:
         cfg.veo_initial_duration_sec + required_extends * cfg.veo_extend_duration_sec
     )
 
-    if not get_settings().dry_run:
+    if not get_settings().dry_run and cfg.video_provider == "kling":
+        try:
+            from app.services.kie_client import cleanup_kling_temp_clips
+            await cleanup_kling_temp_clips(all_video_refs)
+        except Exception as _cleanup_exc:
+            logger.warning(
+                "[%s] item_%d · VideoAgent: Kling S3 cleanup failed (%s) — continuing",
+                task_id, item_index, _cleanup_exc,
+            )
+
+    if not get_settings().dry_run and cfg.video_provider == "veo":
         try:
             from app.services.gemini_client import cleanup_veo_temp_files
             await cleanup_veo_temp_files(all_video_refs, cfg.vertex_project_id)

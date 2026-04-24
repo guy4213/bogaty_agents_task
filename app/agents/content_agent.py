@@ -170,6 +170,173 @@ Return ONLY a valid JSON object. No preamble, no markdown fences.
 Schema:
 {schema}"""
 def _build_reels_script_prompt(state: ContentEngineState) -> str:
+    from app.config import get_settings as _cfg
+    if _cfg().video_provider == "kling":
+        return _build_reels_script_prompt_kling(state)
+    return _build_reels_script_prompt_veo(state)
+
+
+def _build_reels_script_prompt_kling(state: ContentEngineState) -> str:
+    lang = state["language"]
+    desc = state["description"]
+
+    lang_instruction = (
+        "Write ALL text fields (caption_text, full_caption, hashtags) in Hebrew."
+        if lang == "he"
+        else "Write ALL text fields in English."
+    )
+
+    return f"""You are a strict, precise AI video architecture scriptwriter. Generate a 30-second vertical Reel script (3 scenes × 10s).
+
+TOPIC: "{desc}"
+{lang_instruction}
+
+════════════════════════════════════════
+STEP 1 — IDENTIFY THE CANONICAL SUBJECT
+════════════════════════════════════════
+Define the single specific subject of this video.
+
+Rules:
+- Be hyper-specific. Name the exact object, food, person, or item.
+- This exact string MUST appear at the start of EVERY scene's visual_description.
+- ✅ GOOD (food): "thin spaghetti pasta with cherry tomatoes and garlic"
+- ✅ GOOD (travel): "sunset view from Santorini cliffside at golden hour"
+- ✅ GOOD (tech): "matte black mechanical keyboard with RGB lighting"
+- ❌ BAD: "pasta" / "food" / "the subject" / "the item"
+
+════════════════════════════════════════
+STEP 2 — DEFINE THE VISUAL STYLE
+════════════════════════════════════════
+Define a "visual_style_descriptor" — one sentence (max 25 words) locking:
+  lighting temperature, color palette, camera style, depth of field, and mood.
+
+Examples by category — pick the style that fits your topic:
+- (Food/Lifestyle): "Warm candlelit tones, rich ochre palette, shallow DOF close-ups, intimate mood."
+- (Real Estate): "Bright natural light, warm whites, wide-angle airy composition, aspirational mood."
+- (Travel): "Vibrant saturated colors, golden hour warmth, sweeping cinematic movement, adventurous mood."
+- (Fitness): "High contrast dramatic shadows, cool steel tones, dynamic motion energy, powerful mood."
+- (Technology): "Clean studio whites with accent RGB glow, macro precision close-ups, sleek modern mood."
+
+Every scene's visual_description MUST weave these exact photometric properties naturally.
+Same lighting, same palette, same texture and mood throughout all 3 scenes.
+
+════════════════════════════════════════
+STEP 3 — CATEGORIZE THE CONTENT
+════════════════════════════════════════
+Analyze the content and define its category in 1-2 words.
+CRITICAL RULE: If the content is related to food, cooking, baking, a recipe, or any culinary topic, you MUST output exactly the word 'food'.
+For any other topic, output the specific descriptive category (e.g., 'fitness', 'real estate', 'technology', 'science').
+
+════════════════════════════════════════
+STEP 4 — THE NARRATIVE ARC (3 SCENES: 10s+10s+10s)
+════════════════════════════════════════
+Structure is NON-CHRONOLOGICAL. Scene 1 is the HOOK. Scenes 2-3 run chronologically.
+
+- Scene 1 (10s): THE HOOK / THE VISION — Show the ultimate payoff, peak moment, or final destination to grab attention.
+  (Travel: stunning view of the final destination. Food: finished plated dish. Real Estate: glowing exterior).
+
+- Scene 2 (10s): THE JOURNEY / THE PROCESS — The core transformation or active process from start to near-completion.
+  Show the full arc: initiation → peak action → settling still.
+  CRITICAL TIMING RULE:
+  - Seconds 0-3: action begins — key elements introduced.
+  - Seconds 3-7: active progression — combining, building, traveling, exploring.
+  - Seconds 7-10: action decelerates. Subject settles. End on a nearly still frame.
+  (Travel: moving between locations → exploring → arriving. Food: combine → cook → settle still. Real Estate: enter → pan → settle on hero spot).
+
+- Scene 3 (10s): THE FINAL DESTINATION / THE PAYOFF — The subject is fully complete and presented in its final ideal environment.
+  Camera slowly pushes in for a cinematic hero presentation.
+  (Travel: relaxing at the final scenic spot. Food: plated dish beauty shot. Tech: completed device glowing).
+
+For EACH scene provide:
+
+1. visual_description:
+   - MUST start with the canonical_subject verbatim
+   - Describe EXACTLY what is physically happening in the frame
+   - Weave in lighting, palette and mood from visual_style_descriptor naturally
+   - Describe camera as a FLUID continuous motion
+   - 🚫 ZERO HALLUCINATION RULE: describe ONLY physical visible items.
+
+2. entry_state:
+   - One precise sentence: the EXACT visual state at frame zero of this scene
+   - Scene 1: "opening shot — final vision/result already visible"
+   - Scene 2: "cut to initial state/components — chronological sequence begins"
+   - Scene 3: MUST list every action from scene 2 as already completed.
+
+3. narrator_text:
+   - 1-2 sentences spoken aloud by an off-screen narrator, in {("Hebrew" if lang == "he" else "English")}
+   - Conversational and warm tone; fits the scene's emotional beat.
+
+4. caption_text / caption_text_en:
+   - caption_text: EXACT verbatim copy of narrator_text — word-for-word identical, same language.
+   - caption_text_en: ALWAYS in English — concise 8-word version.
+   - CRITICAL: caption_text MUST match narrator_text exactly.
+
+5. audio_mood:
+   - Specify music energy + tempo + ambient sounds
+   - Use abstract musical descriptors ONLY — no instrument names
+   - 🚫 FORBIDDEN: "guitar", "piano", "drums", or any physical instrument name
+   - Genre MUST stay consistent across all 3 scenes
+   - Scene 2 audio MUST include a natural energy decrease toward the end.
+
+════════════════════════════════════════
+STRICT ANTI-HALLUCINATION RULES
+════════════════════════════════════════
+1. LOGICAL CONTINUITY: Elements must make logical sense for the specific category.
+2. NO CROSS-MODALITY: visual_description must be 100% silent.
+3. FORWARD MOTION ONLY: within scenes 2-3, time moves forward only.
+4. NO REPEAT ACTIONS: if a specific action was the focus in scene N, it CANNOT be the exact same focus in scene N+1.
+5. SCENE 2 MUST DECELERATE: the last 3 seconds of scene 2 must be calm and nearly static.
+6. SUBJECT LOCK: The "canonical_subject" must remain the central anchor across all scenes.
+════════════════════════════════════════
+OUTPUT FORMAT — CRITICAL
+════════════════════════════════════════
+Your response MUST be a single raw JSON object.
+ABSOLUTELY FORBIDDEN: markdown fences, backticks, any text before {{ or after }}.
+The first character MUST be {{ and the last MUST be }}.
+
+{{
+  "index": 0,
+  "canonical_subject": "...",
+  "visual_style_descriptor": "...",
+  "content_category": "...",
+  "scenes": [
+    {{
+      "scene": 1,
+      "duration_sec": 10,
+      "entry_state": "opening shot — finished result already visible",
+      "visual_description": "[canonical_subject] — [finished result + fluid camera + lighting/mood]",
+      "caption_text": "...",
+      "caption_text_en": "...",
+      "narrator_text": "...",
+      "audio_mood": "..."
+    }},
+    {{
+      "scene": 2,
+      "duration_sec": 10,
+      "entry_state": "cut to initial state/components — chronological sequence begins",
+      "visual_description": "[canonical_subject] — [full process arc: initiation → peak action → settle still + fluid camera + lighting/mood]",
+      "caption_text": "...",
+      "caption_text_en": "...",
+      "narrator_text": "...",
+      "audio_mood": "... peak energy seconds 0-7, decreasing toward end"
+    }},
+    {{
+      "scene": 3,
+      "duration_sec": 10,
+      "entry_state": "subject is fully complete and presented in its final environment",
+      "visual_description": "[canonical_subject] — fully presented in its final state, [specific environmental details], camera slowly pushing in.",
+      "caption_text": "...",
+      "caption_text_en": "...",
+      "narrator_text": "...",
+      "audio_mood": "..."
+    }}
+  ],
+  "hashtags": ["#tag1", "#tag2"],
+  "full_caption": "..."
+}}"""
+
+
+def _build_reels_script_prompt_veo(state: ContentEngineState) -> str:
     lang = state["language"]
     desc = state["description"]
 
@@ -221,8 +388,8 @@ Same lighting, same palette, same texture and mood throughout all 4 scenes.
 ════════════════════════════════════════
 STEP 3 — CATEGORIZE THE CONTENT
 ════════════════════════════════════════
-Analyze the content and define its category in 1-2 words. 
-CRITICAL RULE: If the content is related to food, cooking, baking, a recipe, or any culinary topic, you MUST output exactly the word 'food'. 
+Analyze the content and define its category in 1-2 words.
+CRITICAL RULE: If the content is related to food, cooking, baking, a recipe, or any culinary topic, you MUST output exactly the word 'food'.
 For any other topic, output the specific descriptive category (e.g., 'fitness', 'real estate', 'technology', 'science').
 ════════════════════════════════════════
 ════════════════════════════════════════
@@ -245,8 +412,8 @@ This applies to ANY topic (Food, Travel, Sports, Real Estate, Tech, etc.).
   - Seconds 2-4: active progression — combining, building, traveling, exploring.
   - Seconds 4-7: action decelerates. Subject settles. End on a nearly still frame.
   This full arc (initiate → peak action → settle) is non-negotiable.
-  (Travel: moving between locations → exploring → arriving at the hotel room. 
-   Food: combine in pan → cook → settle still. 
+  (Travel: moving between locations → exploring → arriving at the hotel room.
+   Food: combine in pan → cook → settle still.
    Real Estate: enter room → pan across → settle on hero spot).
 
 - Scene 4 (7s): THE FINAL DESTINATION / THE PAYOFF — The subject is fully complete and presented in its final ideal environment.
@@ -293,7 +460,7 @@ For EACH scene provide:
 STRICT ANTI-HALLUCINATION RULES
 ════════════════════════════════════════
 1. LOGICAL CONTINUITY (Context-Aware Elements): Elements must make logical sense for the specific category.
-   - For "CLOSED" processes (like cooking, recipes, or product assembly): Do NOT introduce new ingredients, magical objects, or people not established in the first scenes. 
+   - For "CLOSED" processes (like cooking, recipes, or product assembly): Do NOT introduce new ingredients, magical objects, or people not established in the first scenes.
    - For "OPEN" journeys (like travel, real estate tours, or events): You MAY introduce new environments, landscapes, or objects (e.g., statues, landmarks, different rooms), but they MUST logically belong to the specific stated itinerary/location. No bizarre or out-of-context additions.
 2. NO CROSS-MODALITY: visual_description must be 100% silent. Never describe sound, music, or smell inside a visual field.
 3. FORWARD MOTION ONLY: within scenes 2-4, time and the journey move forward only. No rewinding, no undoing.

@@ -84,14 +84,43 @@ async def _ping_s3() -> HealthResult:
         return HealthResult("s3", False, latency, str(exc))
 
 
+async def _ping_kling() -> HealthResult:
+    """Lightweight kie.ai health check — hits their account endpoint."""
+    cfg = get_settings()
+    t0 = time.monotonic()
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{cfg.kie_api_base}/api/v1/account/costs",
+                headers={
+                    "Authorization": f"Bearer {cfg.kie_api_key}",
+                    "Content-Type": "application/json",
+                },
+            )
+            # 200 or 401 both confirm the endpoint is reachable
+            # 401 means wrong key but service is up
+            if resp.status_code in (200, 401):
+                latency = int((time.monotonic() - t0) * 1000)
+                healthy = resp.status_code == 200
+                return HealthResult("kling", healthy, latency, None if healthy else "Invalid API key")
+            resp.raise_for_status()
+    except Exception as exc:
+        latency = int((time.monotonic() - t0) * 1000)
+        return HealthResult("kling", False, latency, str(exc))
+
+
 # ---------------------------------------------------------------------------
 # Aggregate health check
 # ---------------------------------------------------------------------------
 
+get_breaker("kling")   # register on startup
+
 _PING_FNS = {
     "claude": _ping_claude,
     "gemini": _ping_gemini,
-    "s3": _ping_s3,
+    "s3":     _ping_s3,
+    "kling":  _ping_kling,
 }
 
 
@@ -170,7 +199,7 @@ async def preflight_check(required_services: list[str]) -> dict[str, bool]:
 PIPELINE_SERVICES = {
     "text_only":  ["claude", "s3"],
     "text_image": ["claude", "gemini", "s3"],
-    "full_video": ["claude", "gemini", "s3"],
+    "full_video": ["claude", "gemini", "kling", "s3"],  # gemini=images, kling=video
 }
 
 
