@@ -488,8 +488,7 @@ async def run(state: ContentEngineState) -> dict:
         from app.mocks.mock_clients import mock_burn_captions
         video_bytes = await mock_burn_captions(
             video_bytes, scenes,
-            cfg.veo_initial_duration_sec,
-            cfg.veo_extend_duration_sec,
+            scene_durations=scene_durations,
             lang=lang,
         )
     else:
@@ -520,7 +519,10 @@ async def run(state: ContentEngineState) -> dict:
     script_key = asset_key(task_id, platform, content_type, item_index, "script.txt")
     await upload_text(script_key, script_text)
 
-    veo_cost = 0.50 + required_extends * 0.20
+    if cfg.video_provider == "kling":
+        video_cost = 0.90 * len(all_video_refs)   # ~$0.09/sec × 10s per clip
+    else:
+        video_cost = 0.50 + required_extends * 0.20
 
     if lang == "he":
         has_captions = all(bool(s.get("caption_text")) for s in scenes)
@@ -538,7 +540,7 @@ async def run(state: ContentEngineState) -> dict:
 
     logger.info(
         "[%s] VideoAgent: item_%d uploaded %s (%ds) has_captions=%s cost~$%.2f",
-        task_id, item_index, video_key, total_duration, has_captions, veo_cost,
+        task_id, item_index, video_key, total_duration, has_captions, video_cost,
     )
 
     return {
@@ -546,7 +548,7 @@ async def run(state: ContentEngineState) -> dict:
         "current_video_ref": current_video_ref,
         "completed_extends": completed_extends,
         "all_video_refs":    all_video_refs,
-        "cost_accumulated":  state.get("cost_accumulated", 0.0) + veo_cost,
+        "cost_accumulated":  state.get("cost_accumulated", 0.0) + video_cost,
     }
 
 class _PartialVideoError(Exception):

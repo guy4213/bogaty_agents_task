@@ -43,7 +43,7 @@ async def _submit_task(payload: dict) -> str:
 
 async def _poll_task(task_id: str) -> str:
     cfg = get_settings()
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     deadline = loop.time() + cfg.kie_poll_timeout_sec
     async with httpx.AsyncClient(timeout=30.0) as client:
         while True:

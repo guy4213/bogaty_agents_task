@@ -118,79 +118,170 @@ def _make_single_caption(item_index: int, lang: str, platform: str) -> str:
 
 
 def _make_reel_script(lang: str) -> str:
-    # FIX: every scene now includes caption_text_en for Veo rendering
-    if lang == "he":
-        scenes = [
-            {
-                "scene": 1, "duration_sec": 8,
-                "visual_description": "ידיים קוצצות עגבניות טריות על לוח עץ",
-                "caption_text":    "מרכיבים טריים בלבד",
-                "caption_text_en": "Fresh ingredients only",
-                "narrator_text":   "הכל מתחיל ממרכיבים טריים ואיכותיים, שנבחרו בקפידה.",
-                "audio_mood": "אווירה רגועה של מטבח",
-            },
-            {
-                "scene": 2, "duration_sec": 7,
-                "visual_description": "פסטה מתבשלת בסיר עם קיטור עולה",
-                "caption_text":    "מבשלים עם אהבה",
-                "caption_text_en": "Cooking with love",
-                "narrator_text":   "הפסטה מתבשלת לאיטה, וריח המטבח כבר ממלא את הבית.",
-                "audio_mood": "צלילי מטבח",
-            },
-            {
-                "scene": 3, "duration_sec": 7,
-                "visual_description": "הגשת הפסטה על צלחת לבנה עם ריחן",
-                "caption_text":    "פרזנטציה מושלמת",
-                "caption_text_en": "Perfect presentation",
-                "narrator_text":   "כשהרוטב פוגש את הפסטה, נוצרת מנה שאי אפשר לעמוד בפניה.",
-                "audio_mood": "מוזיקה עדינה",
-            },
-            {
-                "scene": 4, "duration_sec": 7,
-                "visual_description": "צילום תקריב של המנה המוגמרת",
-                "caption_text":    "תנסו בבית!",
-                "caption_text_en": "Try this at home!",
-                "narrator_text":   "זו לא רק ארוחה — זו חוויה שתרצו לחזור אליה שוב ושוב.",
-                "audio_mood": "מוזיקה עליזה",
-            },
-        ]
-        caption = "פסטה ביתית שתשגע אתכם 🍝"
+    from app.config import get_settings
+    is_kling = get_settings().video_provider == "kling"
+
+    if is_kling:
+        if lang == "he":
+            scenes = [
+                {
+                    "scene": 1, "duration_sec": 10,
+                    "visual_description": "צילום תקריב מרהיב של המנה המוגמרת על שולחן אלגנטי",
+                    "caption_text":    "תוצאה מושלמת",
+                    "caption_text_en": "Perfect result",
+                    "narrator_text":   "זו הרגע שכולם מחכים לו — המנה המושלמת.",
+                    "visual_style_descriptor": "Warm golden-hour tones, steam rising close-ups, slow push-in camera, vibrant appetizing mood.",
+                    "canonical_subject": "pasta dish",
+                    "content_category": "food",
+                    "hashtags": ["#pasta", "#homecooking", "#reels", "#foodvideo"],
+                    "full_caption": "פסטה ביתית שתשגע אתכם 🍝",
+                    "audio_mood": "מוזיקה עליזה",
+                },
+                {
+                    "scene": 2, "duration_sec": 10,
+                    "visual_description": "ידיים מכינות את הרוטב — ערבוב איטי בסיר",
+                    "caption_text":    "תהליך מלא אהבה",
+                    "caption_text_en": "A process full of love",
+                    "narrator_text":   "כל שלב בהכנה מביא אותנו קרוב יותר לשלמות.",
+                    "visual_style_descriptor": "Warm golden-hour tones, steam rising close-ups, slow push-in camera, vibrant appetizing mood.",
+                    "canonical_subject": "pasta dish",
+                    "content_category": "food",
+                    "hashtags": ["#pasta", "#homecooking", "#reels", "#foodvideo"],
+                    "full_caption": "פסטה ביתית שתשגע אתכם 🍝",
+                    "audio_mood": "צלילי מטבח",
+                },
+                {
+                    "scene": 3, "duration_sec": 10,
+                    "visual_description": "הגשה סופית — הפסטה על צלחת לבנה עם ריחן ופרמזן",
+                    "caption_text":    "היעד הסופי",
+                    "caption_text_en": "Final destination",
+                    "narrator_text":   "המנה הסופית — כזו שתרצו לחזור אליה שוב ושוב.",
+                    "visual_style_descriptor": "Warm golden-hour tones, steam rising close-ups, slow push-in camera, vibrant appetizing mood.",
+                    "canonical_subject": "pasta dish",
+                    "content_category": "food",
+                    "hashtags": ["#pasta", "#homecooking", "#reels", "#foodvideo"],
+                    "full_caption": "פסטה ביתית שתשגע אתכם 🍝",
+                    "audio_mood": "מוזיקה עדינה",
+                },
+            ]
+            caption = "פסטה ביתית שתשגע אתכם 🍝"
+        else:
+            scenes = [
+                {
+                    "scene": 1, "duration_sec": 10,
+                    "visual_description": "Stunning close-up of the finished pasta dish on an elegant table",
+                    "caption_text":    "Perfect result",
+                    "caption_text_en": "Perfect result",
+                    "narrator_text":   "This is the moment everyone's been waiting for — the perfect dish.",
+                    "visual_style_descriptor": "Warm golden-hour tones, steam rising close-ups, slow push-in camera, vibrant appetizing mood.",
+                    "canonical_subject": "pasta dish",
+                    "content_category": "food",
+                    "hashtags": ["#pasta", "#homecooking", "#reels", "#foodvideo"],
+                    "full_caption": "Homemade pasta that will blow your mind 🍝",
+                    "audio_mood": "Upbeat music",
+                },
+                {
+                    "scene": 2, "duration_sec": 10,
+                    "visual_description": "Hands preparing the sauce — slow stirring in a pan",
+                    "caption_text":    "A process full of love",
+                    "caption_text_en": "A process full of love",
+                    "narrator_text":   "Every step in the preparation brings us closer to perfection.",
+                    "visual_style_descriptor": "Warm golden-hour tones, steam rising close-ups, slow push-in camera, vibrant appetizing mood.",
+                    "canonical_subject": "pasta dish",
+                    "content_category": "food",
+                    "hashtags": ["#pasta", "#homecooking", "#reels", "#foodvideo"],
+                    "full_caption": "Homemade pasta that will blow your mind 🍝",
+                    "audio_mood": "Kitchen sounds",
+                },
+                {
+                    "scene": 3, "duration_sec": 10,
+                    "visual_description": "Final plating — pasta on white dish with basil and parmesan",
+                    "caption_text":    "Final destination",
+                    "caption_text_en": "Final destination",
+                    "narrator_text":   "The final dish — one you'll want to come back to again and again.",
+                    "visual_style_descriptor": "Warm golden-hour tones, steam rising close-ups, slow push-in camera, vibrant appetizing mood.",
+                    "canonical_subject": "pasta dish",
+                    "content_category": "food",
+                    "hashtags": ["#pasta", "#homecooking", "#reels", "#foodvideo"],
+                    "full_caption": "Homemade pasta that will blow your mind 🍝",
+                    "audio_mood": "Soft music",
+                },
+            ]
+            caption = "Homemade pasta that will blow your mind 🍝"
     else:
-        scenes = [
-            {
-                "scene": 1, "duration_sec": 8,
-                "visual_description": "Hands chopping fresh tomatoes on a wooden board",
-                "caption_text":    "Fresh ingredients only",
-                "caption_text_en": "Fresh ingredients only",
-                "narrator_text":   "It all starts with the freshest ingredients, carefully selected for the perfect dish.",
-                "audio_mood": "Calm kitchen ambience",
-            },
-            {
-                "scene": 2, "duration_sec": 7,
-                "visual_description": "Pasta boiling in pot with rising steam",
-                "caption_text":    "Cooking with love",
-                "caption_text_en": "Cooking with love",
-                "narrator_text":   "The pasta cooks slowly, filling the kitchen with an incredible aroma.",
-                "audio_mood": "Kitchen sounds",
-            },
-            {
-                "scene": 3, "duration_sec": 7,
-                "visual_description": "Plating pasta on white dish with basil",
-                "caption_text":    "Perfect presentation",
-                "caption_text_en": "Perfect presentation",
-                "narrator_text":   "When the sauce meets the pasta, something truly irresistible is born.",
-                "audio_mood": "Soft music",
-            },
-            {
-                "scene": 4, "duration_sec": 7,
-                "visual_description": "Close-up beauty shot of finished dish",
-                "caption_text":    "Try this at home!",
-                "caption_text_en": "Try this at home!",
-                "narrator_text":   "This isn't just a meal — it's an experience you'll want to recreate again and again.",
-                "audio_mood": "Upbeat music",
-            },
-        ]
-        caption = "Homemade pasta that will blow your mind 🍝"
+        # Veo path: 4 scenes (8+7+7+7s) — unchanged
+        if lang == "he":
+            scenes = [
+                {
+                    "scene": 1, "duration_sec": 8,
+                    "visual_description": "ידיים קוצצות עגבניות טריות על לוח עץ",
+                    "caption_text":    "מרכיבים טריים בלבד",
+                    "caption_text_en": "Fresh ingredients only",
+                    "narrator_text":   "הכל מתחיל ממרכיבים טריים ואיכותיים, שנבחרו בקפידה.",
+                    "audio_mood": "אווירה רגועה של מטבח",
+                },
+                {
+                    "scene": 2, "duration_sec": 7,
+                    "visual_description": "פסטה מתבשלת בסיר עם קיטור עולה",
+                    "caption_text":    "מבשלים עם אהבה",
+                    "caption_text_en": "Cooking with love",
+                    "narrator_text":   "הפסטה מתבשלת לאיטה, וריח המטבח כבר ממלא את הבית.",
+                    "audio_mood": "צלילי מטבח",
+                },
+                {
+                    "scene": 3, "duration_sec": 7,
+                    "visual_description": "הגשת הפסטה על צלחת לבנה עם ריחן",
+                    "caption_text":    "פרזנטציה מושלמת",
+                    "caption_text_en": "Perfect presentation",
+                    "narrator_text":   "כשהרוטב פוגש את הפסטה, נוצרת מנה שאי אפשר לעמוד בפניה.",
+                    "audio_mood": "מוזיקה עדינה",
+                },
+                {
+                    "scene": 4, "duration_sec": 7,
+                    "visual_description": "צילום תקריב של המנה המוגמרת",
+                    "caption_text":    "תנסו בבית!",
+                    "caption_text_en": "Try this at home!",
+                    "narrator_text":   "זו לא רק ארוחה — זו חוויה שתרצו לחזור אליה שוב ושוב.",
+                    "audio_mood": "מוזיקה עליזה",
+                },
+            ]
+            caption = "פסטה ביתית שתשגע אתכם 🍝"
+        else:
+            scenes = [
+                {
+                    "scene": 1, "duration_sec": 8,
+                    "visual_description": "Hands chopping fresh tomatoes on a wooden board",
+                    "caption_text":    "Fresh ingredients only",
+                    "caption_text_en": "Fresh ingredients only",
+                    "narrator_text":   "It all starts with the freshest ingredients, carefully selected for the perfect dish.",
+                    "audio_mood": "Calm kitchen ambience",
+                },
+                {
+                    "scene": 2, "duration_sec": 7,
+                    "visual_description": "Pasta boiling in pot with rising steam",
+                    "caption_text":    "Cooking with love",
+                    "caption_text_en": "Cooking with love",
+                    "narrator_text":   "The pasta cooks slowly, filling the kitchen with an incredible aroma.",
+                    "audio_mood": "Kitchen sounds",
+                },
+                {
+                    "scene": 3, "duration_sec": 7,
+                    "visual_description": "Plating pasta on white dish with basil",
+                    "caption_text":    "Perfect presentation",
+                    "caption_text_en": "Perfect presentation",
+                    "narrator_text":   "When the sauce meets the pasta, something truly irresistible is born.",
+                    "audio_mood": "Soft music",
+                },
+                {
+                    "scene": 4, "duration_sec": 7,
+                    "visual_description": "Close-up beauty shot of finished dish",
+                    "caption_text":    "Try this at home!",
+                    "caption_text_en": "Try this at home!",
+                    "narrator_text":   "This isn't just a meal — it's an experience you'll want to recreate again and again.",
+                    "audio_mood": "Upbeat music",
+                },
+            ]
+            caption = "Homemade pasta that will blow your mind 🍝"
 
     return json.dumps({
         "index":                   0,
@@ -325,8 +416,7 @@ async def mock_presigned_url(key: str, expiry_sec: int = 3600) -> str:
 async def mock_burn_captions(
     video_bytes: bytes,
     scenes: list,
-    initial_duration: int,
-    extend_duration: int,
+    scene_durations: list[float],
     lang: str = "he",
     task_id: str = "",
     item_index: int = -1,
