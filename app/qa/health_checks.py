@@ -92,7 +92,7 @@ async def _ping_kling() -> HealthResult:
         import httpx
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
-                f"{cfg.kie_api_base}/api/v1/jobs/queryTask",
+                f"{cfg.kie_api_base}/api/v1/jobs/recordInfo",
                 headers={
                     "Authorization": f"Bearer {cfg.kie_api_key}",
                     "Content-Type": "application/json",

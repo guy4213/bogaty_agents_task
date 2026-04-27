@@ -1,7 +1,7 @@
 from __future__ import annotations
-from asyncio import subprocess
 import logging
 import pathlib
+import subprocess
 
 from app.config import get_settings, get_settings as _get_settings_for_import
 from app.graph.state import ContentEngineState

@@ -125,13 +125,14 @@ interface NewTaskFormProps {
   setContentType: (v: ContentType) => void;
   quantity: number;
   setQuantity: (v: number) => void;
+  description: string;
+  setDescription: (v: string) => void;
 }
 
-export function NewTaskForm({ contentType, setContentType, quantity, setQuantity }: NewTaskFormProps) {
+export function NewTaskForm({ contentType, setContentType, quantity, setQuantity, description, setDescription }: NewTaskFormProps) {
   const router = useRouter();
   const [platform, setPlatform] = useState<Platform>('instagram');
   const [language, setLanguage] = useState<Language>('en');
-  const [description, setDescription] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
