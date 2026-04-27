@@ -605,6 +605,163 @@ def _sync_merge_clips(
 
     return result, scene_durations
 
+async def download_and_merge_clips_s3(
+    s3_keys: list[str],
+    clip_duration: int,
+    task_id: str = "",
+    item_index: int = -1,
+) -> tuple[bytes, list[float]]:
+    """Download Kling clips from S3, merge with looped audio.
+    Mirror of download_and_merge_clips() but reads from S3 instead of GCS.
+    Returns (merged_bytes, scene_durations).
+    """
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None,
+        _sync_merge_clips_s3,
+        s3_keys,
+        clip_duration,
+        task_id,
+        item_index,
+    )
+
+
+def _sync_merge_clips_s3(
+    s3_keys: list[str],
+    clip_duration: int,
+    task_id: str = "",
+    item_index: int = -1,
+) -> tuple[bytes, list[float]]:
+    import static_ffmpeg
+    import shutil
+    import boto3
+    from app.config import get_settings
+    static_ffmpeg.add_paths()
+
+    ffmpeg_exe = shutil.which("ffmpeg")
+    if not ffmpeg_exe:
+        raise RuntimeError("FFmpeg not found")
+
+    cfg = get_settings()
+    tmp_dir = pathlib.Path("C:/tmp/ffmpeg_work")
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    prefix = f"[{task_id}] item_{item_index}" if task_id else "FFmpeg-S3"
+
+    s3 = boto3.client(
+        "s3",
+        region_name=cfg.s3_region,
+        aws_access_key_id=cfg.aws_access_key_id,
+        aws_secret_access_key=cfg.aws_secret_access_key,
+    )
+
+    # Step 1 — download each clip from S3
+    clip_paths = [tmp_dir / f"kling_clip_{i}.mp4" for i in range(len(s3_keys))]
+    for i, key in enumerate(s3_keys):
+        logger.info("%s · downloading S3 clip %d/%d: %s", prefix, i + 1, len(s3_keys), key)
+        response = s3.get_object(Bucket=cfg.s3_bucket_name, Key=key)
+        clip_paths[i].write_bytes(response["Body"].read())
+
+    # Step 2 — Kling clips are already full clip_duration each, no trimming needed
+    scene_durations: list[float] = [float(clip_duration)] * len(s3_keys)
+
+    # Step 3 — merge: video hard cut + audio crossfade (identical to _sync_merge_clips)
+    n = len(clip_paths)
+    output_path = tmp_dir / "kling_merged.mp4"
+
+    if n == 1:
+        proc = subprocess.run(
+            [ffmpeg_exe, "-y", "-i", clip_paths[0].name, "-c", "copy", output_path.name],
+            cwd=str(tmp_dir),
+            capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
+        )
+    else:
+        total_duration = n * clip_duration
+
+        # Probe which clips have audio — find first clip with music (T2V clip)
+        ffprobe_exe = shutil.which("ffprobe") or ffmpeg_exe.replace("ffmpeg", "ffprobe")
+        def _has_audio(path: pathlib.Path) -> bool:
+            r = subprocess.run(
+                [ffprobe_exe, "-v", "quiet", "-select_streams", "a",
+                 "-show_entries", "stream=codec_type", "-of", "csv=p=0", path.name],
+                cwd=str(tmp_dir), capture_output=True, text=True,
+            )
+            return bool(r.stdout.strip())
+
+        clip_has_audio = [_has_audio(p) for p in clip_paths]
+        audio_src_idx = next((i for i, a in enumerate(clip_has_audio) if a), None)
+
+        # Build inputs: if we have music, prepend it with -stream_loop -1 for reliable looping
+        inputs = []
+        if audio_src_idx is not None:
+            inputs += ["-stream_loop", "-1", "-i", clip_paths[audio_src_idx].name]
+            music_idx = 0
+            v_offset = 1
+        else:
+            music_idx = None
+            v_offset = 0
+
+        for p in clip_paths:
+            inputs += ["-i", p.name]
+
+        filter_parts = []
+        for i in range(n):
+            vi = i + v_offset
+            filter_parts.append(
+                f"[{vi}:v]scale=720:1280:force_original_aspect_ratio=decrease,"
+                f"pad=720:1280:(ow-iw)/2:(oh-ih)/2,setsar=1[v{i}]"
+            )
+        video_inputs = "".join(f"[v{i}]" for i in range(n))
+        filter_parts.append(f"{video_inputs}concat=n={n}:v=1:a=0[vout]")
+
+        if music_idx is not None:
+            filter_parts.append(
+                f"[{music_idx}:a]atrim=duration={total_duration},asetpts=PTS-STARTPTS[aout]"
+            )
+            audio_map = ["-map", "[aout]"]
+            audio_codec = ["-c:a", "aac"]
+        else:
+            audio_map = []
+            audio_codec = ["-an"]
+
+        filter_complex = ";".join(filter_parts)
+        cmd = [
+            ffmpeg_exe, "-y",
+        ] + inputs + [
+            "-filter_complex", filter_complex,
+            "-map", "[vout]",
+        ] + audio_map + [
+            "-c:v", "libx264",
+            "-crf", "18",
+            "-preset", "fast",
+        ] + audio_codec + [
+            output_path.name,
+        ]
+        logger.info("%s · merging %d Kling clips — video=hard_cut audio=stream_loop(%ds) src=clip%s",
+                    prefix, n, total_duration, audio_src_idx)
+        proc = subprocess.run(
+            cmd, cwd=str(tmp_dir),
+            capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
+        )
+
+    if proc.returncode != 0:
+        logger.error("%s · FFmpeg merge error: %s", prefix, proc.stderr[-2000:])
+        raise RuntimeError(f"FFmpeg merge failed:\n{proc.stderr[-500:]}")
+
+    result = output_path.read_bytes()
+    logger.info(
+        "%s · merged %d Kling clips → %d bytes | scene_durations=%s",
+        prefix, n, len(result), scene_durations,
+    )
+
+    for f in clip_paths + [output_path]:
+        try: f.unlink()
+        except Exception: pass
+
+    return result, scene_durations
+
+
 def extract_last_frame(video_bytes: bytes) -> bytes:
     """חותך את הframe האחרון מהוידאו ומחזיר PNG bytes."""
     import static_ffmpeg

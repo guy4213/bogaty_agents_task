@@ -86,6 +86,27 @@ async def presigned_url(key: str, expiry_sec: int = 3600) -> str:
     return await loop.run_in_executor(None, _sync_presign, key, expiry_sec)
 
 
+def _sync_download_bytes(key: str) -> bytes:
+    cfg = get_settings()
+    response = _get_client().get_object(Bucket=cfg.s3_bucket_name, Key=key)
+    return response["Body"].read()
+
+
+async def download_bytes(key: str) -> bytes:
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _sync_download_bytes, key)
+
+
+def _sync_delete_object(key: str) -> None:
+    cfg = get_settings()
+    _get_client().delete_object(Bucket=cfg.s3_bucket_name, Key=key)
+
+
+async def delete_object(key: str) -> None:
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _sync_delete_object, key)
+
+
 def asset_key(task_id: str, platform: str, content_type: str, item_index: int, filename: str) -> str:
     # קבץ לפי סוג תוכן
     if content_type == "comment":

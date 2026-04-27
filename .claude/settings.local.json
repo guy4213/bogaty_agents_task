@@ -5,8 +5,20 @@
       "Bash(claude mcp *)",
       "Bash(claude.exe mcp *)",
       "Bash(npx claude *)",
-      "Bash(python -c \"from app.agents.video_agent import run; from app.services.tts_service import synthesize; print\\('OK'\\)\")"
-
+      "Bash(python -c \"from app.agents.video_agent import run; from app.services.tts_service import synthesize; print\\('OK'\\)\")",
+      "Bash(DRY_RUN=true VIDEO_PROVIDER=kling python *)",
+      "Bash(DRY_RUN=true VIDEO_PROVIDER=kling python3 *)",
+      "PowerShell($env:DRY_RUN=\"true\"; $env:VIDEO_PROVIDER=\"kling\"; python scripts/test_e2e_dry_run.py --scenario 2 2>&1)",
+      "Read(//c/Users/guy42/AppData/Local/Programs/Python//**)",
+      "Bash(ls /c/Python*)",
+      "Bash(DRY_RUN=true VIDEO_PROVIDER=kling /c/Users/guy42/AppData/Local/Programs/Python/Python312/python.exe *)",
+      "Bash(PYTHONIOENCODING=utf-8 DRY_RUN=true VIDEO_PROVIDER=kling /c/Users/guy42/AppData/Local/Programs/Python/Python312/python.exe *)",
+      "Bash(PYTHONIOENCODING=utf-8 PYTHONPATH=/c/Users/guy42/Desktop/bogaty_agents_task DRY_RUN=true VIDEO_PROVIDER=kling /c/Users/guy42/AppData/Local/Programs/Python/Python312/python.exe *)",
+      "Bash(PYTHONIOENCODING=utf-8 PYTHONPATH=/c/Users/guy42/Desktop/bogaty_agents_task DRY_RUN=true VIDEO_PROVIDER=veo /c/Users/guy42/AppData/Local/Programs/Python/Python312/python.exe app/scripts/test_e2e_dry_run.py --scenario 2)",
+      "Bash(curl -s http://localhost:8000/)",
+      "WebSearch",
+      "WebFetch(domain:docs.kie.ai)",
+      "WebFetch(domain:kie.ai)"
     ]
   }
 }
