@@ -9,12 +9,12 @@
 
 Content Engine is a multi-agent pipeline that takes a short description (e.g. *"quick pasta recipe"*) and autonomously produces:
 
-- **Comments** — batches of up to 50 unique, persona-varied comments in a single API call
+- **Comments** — batches of up to 200 unique, persona-varied comments in a single API call
 - **Posts** — caption + image with platform-correct dimensions and Style Reference consistency across a batch
 - **Stories** — same as posts but in 9:16 vertical format
-- **Reels** — full video (≈29s) with embedded captions, native audio, and a matching thumbnail
+- **Reels** — full video (15s or 30s, configurable) with AI-generated music, Hebrew/English TTS narration, burned-in captions, and a matching thumbnail
 
-Supports **Hebrew and English** natively across all content types.
+Supports **Hebrew and English** natively across all content types, with full RTL support.
 
 ---
 
@@ -26,25 +26,43 @@ Each request is routed through a deterministic LangGraph pipeline based on conte
 comment  →  Content Agent → Validator
 post     →  Content Agent → Image Agent → Validator
 story    →  Content Agent → Image Agent → Validator
-reels    →  Content Agent → Image Agent (thumbnail) → Video Agent → Validator
+reels    →  Content Agent → Style Reference (Imagen) → Video Agent → Validator
 ```
 
 ### Agents
 
 | Agent | Model | Responsibility |
 |---|---|---|
-| **Content Agent** | Claude Sonnet 4 | Research + copywriting in one call. Generates full batches (e.g. 50 comments) as a single structured JSON response. Includes persona rotation for variety. |
-| **Image Agent** | Nano Banana 2 (Gemini 3.1 Flash Image) | Generates platform-sized images natively (1:1, 9:16). Uses Style Reference — first image anchors the visual style for all subsequent images in the batch. |
-| **Video Agent** | Veo 3.1 Full (Vertex AI) | Generates an 8s clip then extends it in 7s increments. Audio is native to Veo. Payoff scene uses image-to-video for visual accuracy; FFmpeg crossfades audio at the join. Hebrew captions are burned in via FFmpeg. |
-| **Content Validator** | Claude + langdetect | Two-layer validation: deterministic checks (language, length, uniqueness via Jaccard similarity) + LLM quality score (1–10, reject if < 6). Feeds retry feedback back to the originating agent, up to 2 retries. |
+| **Content Agent** | Claude Sonnet 4.5 | Generates full batches as a single structured JSON response. Includes persona rotation for comments, scene scripts for reels. Accepts retry feedback from the Validator. |
+| **Image Agent** | Gemini Imagen 4 | Generates platform-sized images (1:1, 9:16). First image anchors a Style Reference used for visual consistency across the batch. |
+| **Video Agent** | Kling 2.6 (T2V) + Kling v2.1 Pro (I2V) via kie.ai | Generates clip 1 (T2V with AI music), then extends via image-to-video from each clip's last frame. FFmpeg merges clips, loops music from clip 1 across full duration, mixes Google Cloud TTS narration, and burns captions. |
+| **Content Validator** | Claude + langdetect | Two-layer: deterministic checks (language, length, Jaccard similarity ≥ 0.7) + LLM quality score (1–10, reject < 6). Feeds retry feedback back to the Content Agent, up to 2 retries. |
+
+### Video Pipeline Detail
+
+For a 3-scene reel (default 10s per clip = 30s total):
+
+```
+Scene 1  →  Kling 2.6 T2V  (10s, with AI music, sound=true)
+Scene 2  →  Kling v2.1 Pro I2V  (10s, image-to-video from Scene 1 last frame)
+Scene 3  →  Kling v2.1 Pro I2V  (10s, image-to-video from Scene 2 last frame, payoff)
+         ↓
+FFmpeg:  concat 3 clips + loop Scene 1 music to 30s
+         + Google Cloud TTS narration mixed at 25% music / 75% voice
+         + captions burned in (Hebrew RTL or English)
+         ↓
+S3:  video.mp4 + script.txt + manifest.json
+```
+
+Clip duration is controlled by a single env var (`KIE_CLIP_DURATION=5` or `10`).
 
 ### Checkpointing (3 tiers)
 
-The system is designed to **never re-run a step it already completed**, protecting against wasted API spend:
+The system is designed to **never re-run a step it already completed**:
 
-1. **Batch level** — each item runs in its own `try/except`. One failure doesn't cancel the rest. Completed items upload to S3 immediately.
-2. **Pipeline level** — LangGraph `MemorySaver` gives each item a unique `thread_id`. Retrying a failed video task skips the Content and Image nodes that already succeeded.
-3. **Node level** — the Video Agent saves `completed_extends` to state after each Veo Extend call. A crash at extend 3 of 4 resumes from extend 4, not from scratch.
+1. **Batch level** — each item runs independently. One failure doesn't cancel others.
+2. **Pipeline level** — LangGraph `MemorySaver` with unique `thread_id` per item. Retrying a failed task resumes from the last succeeded node.
+3. **Node level** — the Video Agent saves `completed_extends` after each clip. A crash at clip 2 of 3 resumes from clip 3.
 
 ---
 
@@ -53,13 +71,14 @@ The system is designed to **never re-run a step it already completed**, protecti
 | Layer | Technology |
 |---|---|
 | API Server | FastAPI (Python 3.12) + Uvicorn |
+| Frontend | Next.js 14 (App Router) + React Query |
 | Agent Orchestration | LangGraph 1.x with MemorySaver |
-| Text Generation | Anthropic Claude Sonnet 4 |
-| Image Generation | Google Nano Banana 2 via Gemini API |
-| Video Generation | Google Veo 3.1 Full via Vertex AI |
-| Cloud Storage (assets) | AWS S3 via boto3 |
-| Cloud Storage (Veo temp) | Google Cloud Storage (GCS) |
-| Media Processing | FFmpeg via `static-ffmpeg` (clip merge + caption burn) |
+| Text Generation | Anthropic Claude Sonnet 4.5 |
+| Image Generation | Gemini Imagen 4 via Google AI API |
+| Video Generation | Kling 2.6 / v2.1 Pro via kie.ai |
+| TTS | Google Cloud Text-to-Speech (Wavenet) |
+| Cloud Storage | AWS S3 via boto3 |
+| Media Processing | FFmpeg via `static-ffmpeg` (clip merge, audio mix, caption burn) |
 | Observability | LangSmith (optional) |
 | Containerisation | Docker + docker-compose |
 
@@ -67,11 +86,12 @@ The system is designed to **never re-run a step it already completed**, protecti
 
 ## Prerequisites
 
-Before setup, you need accounts and credentials for:
+Accounts and credentials needed:
 
 - **Anthropic** — API key for Claude
-- **Google Cloud** — project with Vertex AI + GCS enabled (for Veo)
-- **Google AI Studio** — API key for Nano Banana 2 image generation
+- **Google AI** — API key for Imagen image generation
+- **Google Cloud** — project with Cloud Text-to-Speech API enabled + service account credentials
+- **kie.ai** — account with credits for Kling video generation
 - **AWS** — S3 bucket + IAM credentials
 
 ---
@@ -81,94 +101,64 @@ Before setup, you need accounts and credentials for:
 ### 1. Anthropic
 
 1. Go to [console.anthropic.com](https://console.anthropic.com) → API Keys → Create Key.
-2. Copy the key — you'll need it as `ANTHROPIC_API_KEY`.
+2. Copy the key → `ANTHROPIC_API_KEY`.
 
 ---
 
-### 2. Google AI Studio (Nano Banana 2 — Images)
+### 2. Google AI (Imagen — Images)
 
 1. Go to [aistudio.google.com](https://aistudio.google.com) → Get API Key.
-2. Copy the key — you'll need it as `GOOGLE_AI_API_KEY`.
-3. Make sure your project has the **Generative Language API** enabled.
+2. Copy the key → `GOOGLE_AI_API_KEY`.
+3. Make sure the **Generative Language API** is enabled on your project.
 
 ---
 
-### 3. Google Cloud (Vertex AI — Veo Video Generation)
+### 3. Google Cloud (TTS — Voice Narration)
 
-Veo 3.1 runs on Vertex AI and requires a separate GCP project setup.
-
-#### 3a. Create / select a GCP project
+TTS requires a service account with the Cloud Text-to-Speech API enabled.
 
 ```bash
-gcloud projects create YOUR_PROJECT_ID   # or use an existing one
-gcloud config set project YOUR_PROJECT_ID
-```
+# Enable the API
+gcloud services enable texttospeech.googleapis.com
 
-#### 3b. Enable required APIs
-
-```bash
-gcloud services enable \
-  aiplatform.googleapis.com \
-  storage.googleapis.com
-```
-
-#### 3c. Request Veo 3.1 access
-
-Veo 3.1 is an allowlisted model. Request access at:  
-[cloud.google.com/vertex-ai/generative-ai/docs/video/generate-videos](https://cloud.google.com/vertex-ai/generative-ai/docs/video/generate-videos)
-
-> ⚠️ Without allowlist approval, Veo API calls will return a 403. This can take 1–2 business days.
-
-#### 3d. Create a GCS bucket for Veo temp storage
-
-Veo returns videos to GCS. Create a bucket in the same region as your Vertex location (`us-central1` by default):
-
-```bash
-gsutil mb -l us-central1 gs://YOUR_PROJECT_ID-veo-temp
-```
-
-Set this as `GCS_BUCKET_NAME` in your `.env`.
-
-#### 3e. Create a service account
-
-```bash
 # Create service account
 gcloud iam service-accounts create content-engine \
   --display-name="Content Engine"
 
-# Grant required roles
+# Grant TTS role
 gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
   --member="serviceAccount:content-engine@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
-  --role="roles/aiplatform.user"
+  --role="roles/cloudtexttospeech.user"
 
-gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
-  --member="serviceAccount:content-engine@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
-  --role="roles/storage.objectAdmin"
-
-# Download credentials JSON
+# Download credentials
 gcloud iam service-accounts keys create credentials.json \
   --iam-account=content-engine@YOUR_PROJECT_ID.iam.gserviceaccount.com
 ```
 
-Place `credentials.json` in the project root and set `GOOGLE_APPLICATION_CREDENTIALS=credentials.json` in your `.env`.
+Set `GOOGLE_APPLICATION_CREDENTIALS` to the path of `credentials.json`.
 
 ---
 
-### 4. AWS S3 (Asset Storage)
+### 4. kie.ai (Kling Video Generation)
 
-#### 4a. Create an S3 bucket
+1. Sign up at [kie.ai](https://kie.ai) and top up credits.
+2. Go to your dashboard → API Keys → Create Key.
+3. Copy the key → `KIE_API_KEY`.
+
+**Cost per video:** ~$0.55 per 10s clip × 3 clips = ~$1.65–2.70 per reel (varies by model).
+
+---
+
+### 5. AWS S3 (Asset Storage)
 
 ```bash
+# Create bucket (replace region with your preferred region)
 aws s3api create-bucket \
-  --bucket content-engine-prod \
-  --region eu-west-1 \
-  --create-bucket-configuration LocationConstraint=eu-west-1
-```
+  --bucket your-content-engine-bucket \
+  --region eu-north-1 \
+  --create-bucket-configuration LocationConstraint=eu-north-1
 
-#### 4b. Create an IAM user with S3 access
-
-```bash
-# Create user
+# Create IAM user
 aws iam create-user --user-name content-engine
 
 # Attach S3 policy
@@ -184,7 +174,7 @@ Copy `AccessKeyId` → `AWS_ACCESS_KEY_ID` and `SecretAccessKey` → `AWS_SECRET
 
 ---
 
-### 5. LangSmith (Optional — Tracing)
+### 6. LangSmith (Optional — Tracing)
 
 1. Go to [smith.langchain.com](https://smith.langchain.com) → Settings → API Keys.
 2. Copy the key → `LANGSMITH_API_KEY`.
@@ -200,19 +190,18 @@ Copy `AccessKeyId` → `AWS_ACCESS_KEY_ID` and `SecretAccessKey` → `AWS_SECRET
 git clone <repo>
 cd content-engine
 cp .env.example .env
-# Edit .env with your keys (see Environment Variables section below)
+# Edit .env with your keys
 ```
 
-### 2. Run with Docker (recommended)
+### 2. Run backend with Docker (recommended)
 
 ```bash
 docker compose up --build
 ```
 
-API available at `http://localhost:8000`  
-OpenAPI docs at `http://localhost:8000/docs`
+API at `http://localhost:8000` · Docs at `http://localhost:8000/docs`
 
-### 3. Run locally without Docker
+### 3. Run backend locally
 
 ```bash
 python -m venv .venv
@@ -221,51 +210,54 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
-### 4. Dry-run mode (no real API calls)
+### 4. Run frontend
 
-Set `DRY_RUN=true` in `.env` to run the full pipeline using mock responses. Useful for testing the pipeline structure, checkpointing, and S3 output format without spending API credits.
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Frontend at `http://localhost:3000`
+
+### 5. Dry-run mode (no API calls, no cost)
 
 ```bash
 DRY_RUN=true uvicorn app.main:app --reload
 ```
 
+Runs the full pipeline with mock responses — useful for testing pipeline structure and S3 output format.
+
 ---
 
 ## Environment Variables
 
-Create a `.env` file in the project root. All variables below:
-
 ```bash
 # ── Anthropic ──────────────────────────────────────────────
 ANTHROPIC_API_KEY=sk-ant-...
-CLAUDE_MODEL=claude-sonnet-4-5              # default
+CLAUDE_MODEL=claude-sonnet-4-5
 
-# ── Google AI Studio (images) ──────────────────────────────
+# ── Google AI (images) ─────────────────────────────────────
 GOOGLE_AI_API_KEY=AIza...
 
-# ── Google Cloud / Vertex AI (video) ───────────────────────
-VERTEX_PROJECT_ID=your-gcp-project-id
-VERTEX_LOCATION=us-central1                 # default
-GOOGLE_APPLICATION_CREDENTIALS=credentials.json
-GCS_BUCKET_NAME=your-project-veo-temp       # GCS bucket for Veo output
+# ── Google Cloud (TTS voice narration) ─────────────────────
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/credentials.json
+
+# ── kie.ai / Kling (video generation) ──────────────────────
+KIE_API_KEY=...
+KIE_API_BASE=https://api.kie.ai               # default
+KIE_MODEL_T2V=kling-2.6/text-to-video        # text-to-video (clip 1)
+KIE_MODEL_I2V=kling/v2-1-pro                  # image-to-video (clips 2-3)
+KIE_CLIP_DURATION=10                          # 5 or 10 seconds per clip
+VIDEO_PROVIDER=kling
 
 # ── AWS S3 (asset storage) ─────────────────────────────────
 AWS_ACCESS_KEY_ID=AKIA...
 AWS_SECRET_ACCESS_KEY=...
-S3_BUCKET_NAME=content-engine-prod          # default
-S3_REGION=eu-west-1                         # default
+S3_BUCKET_NAME=your-content-engine-bucket
+S3_REGION=eu-north-1
 
-# ── LangSmith tracing (optional) ───────────────────────────
-LANGSMITH_API_KEY=ls__...
-LANGSMITH_TRACING=false                     # set to true to enable
-
-# ── Model config ───────────────────────────────────────────
-VEO_MODEL=veo-3.1-generate-preview
-VEO_TIMEOUT_SEC=90
-VEO_INITIAL_DURATION_SEC=8
-VEO_EXTEND_DURATION_SEC=7
-VEO_TARGET_DURATION_SEC=29
-
+# ── Image model config ─────────────────────────────────────
 IMAGE_MODEL_FIRST=imagen-4.0-fast-generate-001
 IMAGE_MODEL_STYLE_REF=gemini-3.1-flash-image-preview
 
@@ -275,14 +267,20 @@ MAX_RETRIES_PER_ITEM=2
 JACCARD_SIMILARITY_THRESHOLD=0.7            # batch uniqueness threshold
 
 # ── Circuit breakers ───────────────────────────────────────
-CIRCUIT_BREAKER_THRESHOLD=5                 # consecutive failures to trip
+CIRCUIT_BREAKER_THRESHOLD=5
 CIRCUIT_BREAKER_WINDOW_SEC=120
 CIRCUIT_BREAKER_RECOVERY_SEC=60
+
+# ── LangSmith tracing (optional) ───────────────────────────
+LANGSMITH_API_KEY=ls__...
+LANGSMITH_TRACING=false
 
 # ── Dev ────────────────────────────────────────────────────
 DRY_RUN=false
 LOG_LEVEL=INFO
 ```
+
+> **Video duration:** `KIE_CLIP_DURATION=5` → 15s video (~$1.35), `KIE_CLIP_DURATION=10` → 30s video (~$2.70). Only `5` and `10` are valid values.
 
 ---
 
@@ -292,6 +290,7 @@ LOG_LEVEL=INFO
 |---|---|---|
 | `POST` | `/generate` | Submit a content generation task (async) |
 | `GET` | `/tasks/{task_id}` | Poll task status and results |
+| `GET` | `/tasks/{task_id}/content` | Get generated assets with download URLs |
 | `GET` | `/tasks` | List all tasks |
 | `GET` | `/health` | Service health + circuit breaker states |
 | `GET` | `/` | Liveness probe |
@@ -314,13 +313,12 @@ curl -X POST http://localhost:8000/generate \
   }'
 ```
 
-All 50 comments are generated in **one Claude API call** with persona rotation.  
-Expected: ~1–2 min · ~$0.08–0.12  
-S3: `tasks/{id}/instagram/comment/item_0/content.json`
+All 50 comments generated in **one Claude call** with persona rotation.  
+Expected: ~1–2 min · ~$0.05–0.10
 
 ---
 
-### Scenario 2 — 3 TikTok Reels (Hebrew)
+### Scenario 2 — 1 TikTok Reel (Hebrew, 30s)
 
 ```bash
 curl -X POST http://localhost:8000/generate \
@@ -329,15 +327,14 @@ curl -X POST http://localhost:8000/generate \
     "platform": "tiktok",
     "content_type": "reels",
     "language": "he",
-    "quantity": 3,
-    "description": "quick pasta preparation process"
+    "quantity": 1,
+    "description": "motivational video for athletes"
   }'
 ```
 
-Each Reel: 1 initial Veo clip (8s) + 3 Extend calls (7s each) = ≈29s.  
-Hebrew captions burned in via FFmpeg. Audio crossfaded at the payoff scene join.  
-Expected: ~8–12 min · ~$3–5  
-S3: `tasks/{id}/tiktok/reels/item_{0-2}/` — `video.mp4`, `thumbnail.png`, `script.txt`
+3 Kling clips (10s each) → merged → AI music looped → Hebrew TTS voice → captions burned.  
+Expected: ~5–7 min · ~$2.70  
+S3: `videos/{task_id}/tiktok/item_0/` — `video.mp4`, `script.txt`
 
 ---
 
@@ -356,44 +353,61 @@ curl -X POST http://localhost:8000/generate \
 ```
 
 Images 2 and 3 use Style Reference from image 1 for visual consistency.  
-Expected: ~2–4 min · ~$0.15–0.25  
-S3: `tasks/{id}/instagram/post/item_{0-2}/` — `image.png`, `caption.txt`, `metadata.json`
+Expected: ~2–4 min · ~$0.15–0.25
 
 ---
 
 ### Polling for results
 
 ```bash
+# Status
 curl http://localhost:8000/tasks/{task_id}
+
+# Full content with download URLs
+curl http://localhost:8000/tasks/{task_id}/content
 ```
 
 ```json
 {
-  "task_id": "abc123",
+  "task_id": "abc-123",
   "status": "completed",
-  "items_completed": 3,
-  "items_failed": 0,
-  "total_cost_usd": 0.21,
-  "s3_manifest_url": "https://..."
+  "quantity_delivered": 1,
+  "total_cost_usd": 2.72,
+  "assets": [
+    { "asset_type": "video", "download_url": "https://s3.amazonaws.com/..." },
+    { "asset_type": "text",  "content": { "scenes": [...] } }
+  ]
 }
 ```
 
-Possible statuses: `pending` → `processing` → `completed` / `partial` / `failed`
+Statuses: `pending` → `processing` → `completed` / `partial` / `failed`
 
 ---
 
 ## S3 Output Structure
 
 ```
-tasks/{task_id}/
-  manifest.json                         ← summary of the full task
-  {platform}/{content_type}/
+videos/{task_id}/
+  manifest.json                    ← full task summary + cost breakdown
+  {platform}/
     item_0/
-      content.json / image.png / video.mp4
-      caption.txt
-      metadata.json
-    item_1/
-      ...
+      video.mp4                    ← final merged video (reels)
+      script.txt                   ← scene-by-scene script
+      content.json                 ← captions, hashtags, narrator text
+      thumbnail.png                ← style reference image
+
+posts/{task_id}/
+  manifest.json
+  {platform}/
+    item_0/
+      image.png
+      content.json
+
+comments/{task_id}/
+  manifest.json
+  {platform}/
+    item_0/
+      content.json                 ← all comments as JSON array
 ```
 
 `manifest.json` includes: `quantity_requested`, `quantity_delivered`, `failed_items` (with reasons), `total_cost_usd`, and `cost_saved_by_checkpoint`.
@@ -410,12 +424,26 @@ curl http://localhost:8000/health
 {
   "overall": "healthy",
   "services": [
-    { "service": "claude", "status": "up", "circuit_state": "closed" },
-    { "service": "gemini", "status": "up", "circuit_state": "closed" },
-    { "service": "s3",     "status": "up", "circuit_state": "closed" }
+    { "service": "claude",  "status": "healthy", "latency_ms": 312, "circuit_state": "closed" },
+    { "service": "gemini",  "status": "healthy", "latency_ms": 180, "circuit_state": "closed" },
+    { "service": "s3",      "status": "healthy", "latency_ms": 45,  "circuit_state": "closed" },
+    { "service": "kling",   "status": "healthy", "latency_ms": 210, "circuit_state": "closed" }
   ],
-  "timestamp": "2026-04-15T10:00:00Z"
+  "timestamp": "2026-04-27T10:00:00Z"
 }
 ```
 
-Each service has a circuit breaker: trips after 5 consecutive failures within 120s, recovers via a single probe request every 60s.
+Each service has a circuit breaker: trips after 5 consecutive failures within 120s, recovers after 60s.
+
+---
+
+## Limits
+
+| Content Type | Max Quantity |
+|---|---|
+| comment | 200 |
+| post | 50 |
+| story | 50 |
+| reels | 50 |
+
+Submit multiple requests for larger batches.
