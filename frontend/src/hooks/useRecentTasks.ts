@@ -8,6 +8,7 @@ export function useRecentTasks() {
     queryKey: queryKeys.tasks,
     queryFn: listTasks,
     refetchInterval: 10000,
+    refetchIntervalInBackground: false,
     select: (data) =>
       [...data]
         .sort(

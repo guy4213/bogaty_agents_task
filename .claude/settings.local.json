@@ -18,7 +18,10 @@
       "Bash(curl -s http://localhost:8000/)",
       "WebSearch",
       "WebFetch(domain:docs.kie.ai)",
-      "WebFetch(domain:kie.ai)"
+      "WebFetch(domain:kie.ai)",
+      "Bash(python *)",
+      "Bash(py *)",
+      "Bash(python3 *)"
     ]
   }
 }

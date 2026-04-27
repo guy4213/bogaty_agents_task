@@ -8,6 +8,7 @@ export function useHealth() {
     queryKey: queryKeys.health,
     queryFn: getHealth,
     refetchInterval: 15000,
+    refetchIntervalInBackground: false,
     retry: 1,
   });
 

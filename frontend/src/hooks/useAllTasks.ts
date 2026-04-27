@@ -8,5 +8,6 @@ export function useAllTasks() {
     queryKey: queryKeys.tasks,
     queryFn: listTasks,
     refetchInterval: 5000,
+    refetchIntervalInBackground: false,
   });
 }

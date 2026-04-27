@@ -18,7 +18,6 @@ function extractCaption(asset: AssetRecord | undefined): { text: string; hashtag
   if (!asset?.content) return { text: '', hashtags: [] };
   const content = asset.content;
   if (typeof content === 'string') return { text: content, hashtags: [] };
-  // content.json for posts is an array: [{index, text, hashtags, angle}]
   const obj = (Array.isArray(content) ? content[0] : content) as Record<string, unknown> | null;
   if (obj && typeof obj === 'object') {
     const text = (typeof obj['text'] === 'string' ? obj['text'] : '') || (typeof obj['caption'] === 'string' ? obj['caption'] : '');
@@ -28,12 +27,33 @@ function extractCaption(asset: AssetRecord | undefined): { text: string; hashtag
   return { text: '', hashtags: [] };
 }
 
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = () => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      className="text-[11px] px-2 py-0.5 rounded transition-colors"
+      style={{ background: 'var(--surface2)', border: '1px solid var(--border)', color: copied ? 'var(--success)' : 'var(--fg3)' }}
+    >
+      {copied ? '✓ Copied' : 'Copy'}
+    </button>
+  );
+}
+
 export function PostCard({ itemIndex, imageAsset, captionAsset, aspect, isAnchor }: PostCardProps) {
   const [expanded, setExpanded] = useState(false);
   const { text, hashtags } = extractCaption(captionAsset);
   const imageUrl = imageAsset?.download_url ?? null;
   const rtl = text ? isHebrew(text) : false;
   const aspectClass = aspect === '9:16' ? 'aspect-[9/16]' : aspect === '16:9' ? 'aspect-video' : 'aspect-square';
+  const copyText = [text, ...hashtags.map((h) => `#${h.replace(/^#/, '')}`)].filter(Boolean).join('\n');
 
   return (
     <div
@@ -88,7 +108,7 @@ export function PostCard({ itemIndex, imageAsset, captionAsset, aspect, isAnchor
             </div>
           )}
           {hashtags.length > 0 && (
-            <div className="flex flex-wrap gap-1">
+            <div className={`flex flex-wrap gap-1 ${rtl ? 'flex-row-reverse' : ''}`}>
               {hashtags.map((tag) => (
                 <span
                   key={tag}
@@ -98,6 +118,11 @@ export function PostCard({ itemIndex, imageAsset, captionAsset, aspect, isAnchor
                   #{tag.replace(/^#/, '')}
                 </span>
               ))}
+            </div>
+          )}
+          {copyText && (
+            <div className={`flex ${rtl ? 'justify-start' : 'justify-end'}`}>
+              <CopyButton text={copyText} />
             </div>
           )}
         </div>

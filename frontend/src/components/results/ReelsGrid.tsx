@@ -19,6 +19,9 @@ function groupReels(assets: AssetRecord[]): ReelGroup[] {
   return Array.from(map.values()).sort((a, b) => a.itemIndex - b.itemIndex);
 }
 
+// Kling: 3 clips (1 initial + 2 extends) → completedExtends=3 when done
+const KLING_TOTAL_CLIPS = 3;
+
 export function ReelsGrid({ assets, isProcessing }: ReelsGridProps) {
   const groups = groupReels(assets);
   if (groups.length === 0) {
@@ -36,7 +39,8 @@ export function ReelsGrid({ assets, isProcessing }: ReelsGridProps) {
           itemIndex={group.itemIndex}
           videoAsset={group.videoAsset}
           textAsset={group.textAsset}
-          completedExtends={group.videoAsset ? 4 : 0}
+          completedExtends={group.videoAsset ? KLING_TOTAL_CLIPS : 0}
+          totalClips={KLING_TOTAL_CLIPS}
           isProcessing={isProcessing && !group.videoAsset}
         />
       ))}

@@ -120,7 +120,7 @@ function TaskRow({ task, onClick }: { task: TaskListItem; onClick: () => void })
 
 export default function AllTasksPage() {
   const router = useRouter();
-  const { data: tasks, isLoading, refetch } = useAllTasks();
+  const { data: tasks, isLoading, isError, refetch } = useAllTasks();
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [typeFilter, setTypeFilter]     = useState<string>('all');
   const [platformFilter, setPlatformFilter] = useState<string>('all');
@@ -189,6 +189,13 @@ export default function AllTasksPage() {
             <div className="flex items-center justify-center py-16 gap-2" style={{ color: 'var(--fg3)' }}>
               <div className="w-4 h-4 border-2 rounded-full animate-spin" style={{ borderColor: 'var(--accent-dim)', borderTopColor: 'var(--accent)' }} />
               Loading tasks…
+            </div>
+          ) : isError ? (
+            <div className="flex flex-col items-center justify-center py-16 gap-3">
+              <p className="text-[13px]" style={{ color: 'var(--danger)' }}>⚠ Failed to load tasks — check your connection.</p>
+              <button type="button" onClick={() => refetch()} className="text-[12px] px-3 py-1.5 rounded-[var(--radius-sm)]" style={{ border: '1px solid var(--border2)', color: 'var(--fg2)' }}>
+                Retry
+              </button>
             </div>
           ) : filtered.length === 0 ? (
             <div className="py-16 text-center text-[13px]" style={{ color: 'var(--fg3)' }}>

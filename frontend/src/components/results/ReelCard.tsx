@@ -10,6 +10,7 @@ interface ReelCardProps {
   videoAsset: AssetRecord | undefined;
   textAsset: AssetRecord | undefined;
   completedExtends: number;
+  totalClips?: number;
   isProcessing: boolean;
 }
 
@@ -25,11 +26,32 @@ function extractReelText(asset: AssetRecord | undefined): { caption: string; has
   return { caption, hashtags };
 }
 
-export function ReelCard({ itemIndex, videoAsset, textAsset, completedExtends, isProcessing }: ReelCardProps) {
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = () => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      className="text-[11px] px-2 py-0.5 rounded transition-colors"
+      style={{ background: 'var(--surface2)', border: '1px solid var(--border)', color: copied ? 'var(--success)' : 'var(--fg3)' }}
+    >
+      {copied ? '✓ Copied' : 'Copy'}
+    </button>
+  );
+}
+
+export function ReelCard({ itemIndex, videoAsset, textAsset, completedExtends, totalClips = 3, isProcessing }: ReelCardProps) {
   const [expanded, setExpanded] = useState(false);
   const videoUrl = videoAsset?.download_url ?? null;
   const { caption, hashtags } = extractReelText(textAsset);
   const rtl = caption ? isHebrew(caption) : false;
+  const copyText = [caption, ...hashtags.map((h) => `#${h.replace(/^#/, '')}`)].filter(Boolean).join('\n');
 
   return (
     <div
@@ -38,7 +60,7 @@ export function ReelCard({ itemIndex, videoAsset, textAsset, completedExtends, i
       onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--border2)'; }}
       onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'; }}
     >
-      {/* 9:16 video player — width-constrained so container matches video exactly */}
+      {/* 9:16 video player */}
       <div className="relative aspect-[9/16]" style={{ background: '#000' }}>
         {videoUrl ? (
           <video controls className="w-full h-full object-cover" src={videoUrl} />
@@ -49,9 +71,9 @@ export function ReelCard({ itemIndex, videoAsset, textAsset, completedExtends, i
         )}
       </div>
 
-      {/* Meta: extend progress + download */}
+      {/* Meta: clip progress + download */}
       <div className="px-3 pt-3 flex items-center justify-between">
-        <VeoExtendDots completed={completedExtends} isProcessing={isProcessing} />
+        <VeoExtendDots completed={completedExtends} isProcessing={isProcessing} totalClips={totalClips} />
         {videoUrl && (
           <a
             href={videoUrl}
@@ -90,7 +112,7 @@ export function ReelCard({ itemIndex, videoAsset, textAsset, completedExtends, i
             </div>
           )}
           {hashtags.length > 0 && (
-            <div className="flex flex-wrap gap-1">
+            <div className={`flex flex-wrap gap-1 ${rtl ? 'flex-row-reverse' : ''}`}>
               {hashtags.map((tag) => (
                 <span
                   key={tag}
@@ -100,6 +122,11 @@ export function ReelCard({ itemIndex, videoAsset, textAsset, completedExtends, i
                   #{tag.replace(/^#/, '')}
                 </span>
               ))}
+            </div>
+          )}
+          {copyText && (
+            <div className={`flex ${rtl ? 'justify-start' : 'justify-end'}`}>
+              <CopyButton text={copyText} />
             </div>
           )}
         </div>

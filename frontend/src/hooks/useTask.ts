@@ -10,12 +10,11 @@ function isTerminal(status: string | undefined): boolean {
   return status ? TERMINAL.has(status) : false;
 }
 
-// Stepped backoff: fast start → slow cruise for long-running video tasks
 function backoffMs(pollCount: number): number {
-  if (pollCount < 5)  return 2_000;   // 0–10 s   → every 2 s  (catches fast state changes)
-  if (pollCount < 14) return 5_000;   // 10–55 s  → every 5 s
-  if (pollCount < 22) return 10_000;  // 55–135 s → every 10 s (most tasks finish here)
-  return 20_000;                       // 135 s+   → every 20 s (long video jobs)
+  if (pollCount < 5)  return 2_000;
+  if (pollCount < 14) return 5_000;
+  if (pollCount < 22) return 10_000;
+  return 20_000;
 }
 
 export function useTask(taskId: string) {
@@ -32,6 +31,7 @@ export function useTask(taskId: string) {
       const status = query.state.data?.status;
       return isTerminal(status) ? false : backoffMs(statusPollCount.current);
     },
+    refetchIntervalInBackground: false,
     enabled: Boolean(taskId),
   });
 
@@ -47,6 +47,7 @@ export function useTask(taskId: string) {
       const status = statusQuery.data?.status;
       return isTerminal(status) ? false : backoffMs(contentPollCount.current);
     },
+    refetchIntervalInBackground: false,
     enabled: Boolean(taskId),
     retry: 1,
   });

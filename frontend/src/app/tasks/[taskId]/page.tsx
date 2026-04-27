@@ -150,7 +150,14 @@ export default function TaskDetailPage({ params }: PageProps) {
           </section>
         )}
 
-        {isProcessing && (!content || !content.assets || content.assets.length === 0) && (
+        {contentQuery.isError && (
+          <div className="text-[12px] px-3 py-2 rounded-[var(--radius-sm)] font-mono"
+            style={{ background: 'rgba(239,68,68,0.08)', color: 'var(--danger)', border: '1px solid rgba(239,68,68,0.15)' }}>
+            ⚠ Failed to load results — they may still be processing. The page will retry automatically.
+          </div>
+        )}
+
+        {isProcessing && !contentQuery.isError && (!content || !content.assets || content.assets.length === 0) && (
           <div className="flex items-center gap-2 py-4 text-sm" style={{ color: 'var(--fg3)' }}>
             <div className="w-4 h-4 border-2 rounded-full animate-spin" style={{ borderColor: 'var(--accent-dim)', borderTopColor: 'var(--accent)' }} />
             Waiting for results…

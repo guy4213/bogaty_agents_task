@@ -89,7 +89,7 @@ function TimelineRow({ task, onClick }: { task: TaskListItem; onClick: () => voi
 
 export default function HistoryPage() {
   const router = useRouter();
-  const { data: tasks, isLoading } = useAllTasks();
+  const { data: tasks, isLoading, isError } = useAllTasks();
 
   const grouped = useMemo(() => {
     if (!tasks) return [];
@@ -118,7 +118,13 @@ export default function HistoryPage() {
           </div>
         )}
 
-        {!isLoading && grouped.length === 0 && (
+        {isError && (
+          <p className="py-16 text-center text-[13px]" style={{ color: 'var(--danger)' }}>
+            ⚠ Failed to load history — check your connection and refresh.
+          </p>
+        )}
+
+        {!isLoading && !isError && grouped.length === 0 && (
           <p className="py-16 text-center text-[13px]" style={{ color: 'var(--fg3)' }}>
             No tasks yet. Submit a brief on the New Task page.
           </p>

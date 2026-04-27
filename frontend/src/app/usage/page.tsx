@@ -58,7 +58,7 @@ function BreakdownTable({ title, rows, maxCost }: { title: string; rows: Breakdo
 }
 
 export default function UsagePage() {
-  const { data: tasks, isLoading } = useAllTasks();
+  const { data: tasks, isLoading, isError } = useAllTasks();
 
   const stats = useMemo(() => {
     if (!tasks || tasks.length === 0) return null;
@@ -103,7 +103,13 @@ export default function UsagePage() {
           </div>
         )}
 
-        {!isLoading && !stats && (
+        {isError && (
+          <p className="py-16 text-center text-[13px]" style={{ color: 'var(--danger)' }}>
+            ⚠ Failed to load usage data — check your connection and refresh.
+          </p>
+        )}
+
+        {!isLoading && !isError && !stats && (
           <p className="py-16 text-center text-[13px]" style={{ color: 'var(--fg3)' }}>
             No tasks yet. Submit a brief on the New Task page.
           </p>
