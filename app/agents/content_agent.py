@@ -177,6 +177,10 @@ def _build_reels_script_prompt(state: ContentEngineState) -> str:
 
 
 def _build_reels_script_prompt_kling(state: ContentEngineState) -> str:
+    from app.config import get_settings as _cfg
+    clip_dur = _cfg().kie_clip_duration
+    total_dur = clip_dur * 3
+
     lang = state["language"]
     desc = state["description"]
 
@@ -186,7 +190,7 @@ def _build_reels_script_prompt_kling(state: ContentEngineState) -> str:
         else "Write ALL text fields in English."
     )
 
-    return f"""You are a strict, precise AI video architecture scriptwriter. Generate a 30-second vertical Reel script (3 scenes × 10s).
+    return f"""You are a strict, precise AI video architecture scriptwriter. Generate a {total_dur}-second vertical Reel script (3 scenes × {clip_dur}s).
 
 TOPIC: "{desc}"
 {lang_instruction}
@@ -228,22 +232,17 @@ CRITICAL RULE: If the content is related to food, cooking, baking, a recipe, or 
 For any other topic, output the specific descriptive category (e.g., 'fitness', 'real estate', 'technology', 'science').
 
 ════════════════════════════════════════
-STEP 4 — THE NARRATIVE ARC (3 SCENES: 10s+10s+10s)
+STEP 4 — THE NARRATIVE ARC (3 SCENES: {clip_dur}s+{clip_dur}s+{clip_dur}s)
 ════════════════════════════════════════
 Structure is NON-CHRONOLOGICAL. Scene 1 is the HOOK. Scenes 2-3 run chronologically.
 
-- Scene 1 (10s): THE HOOK / THE VISION — Show the ultimate payoff, peak moment, or final destination to grab attention.
+- Scene 1 ({clip_dur}s): THE HOOK / THE VISION — Show the ultimate payoff, peak moment, or final destination to grab attention.
   (Travel: stunning view of the final destination. Food: finished plated dish. Real Estate: glowing exterior).
 
-- Scene 2 (10s): THE JOURNEY / THE PROCESS — The core transformation or active process from start to near-completion.
+- Scene 2 ({clip_dur}s): THE JOURNEY / THE PROCESS — The core transformation or active process from start to near-completion.
   Show the full arc: initiation → peak action → settling still.
-  CRITICAL TIMING RULE:
-  - Seconds 0-3: action begins — key elements introduced.
-  - Seconds 3-7: active progression — combining, building, traveling, exploring.
-  - Seconds 7-10: action decelerates. Subject settles. End on a nearly still frame.
-  (Travel: moving between locations → exploring → arriving. Food: combine → cook → settle still. Real Estate: enter → pan → settle on hero spot).
 
-- Scene 3 (10s): THE FINAL DESTINATION / THE PAYOFF — The subject is fully complete and presented in its final ideal environment.
+- Scene 3 ({clip_dur}s): THE FINAL DESTINATION / THE PAYOFF — The subject is fully complete and presented in its final ideal environment.
   Camera slowly pushes in for a cinematic hero presentation.
   (Travel: relaxing at the final scenic spot. Food: plated dish beauty shot. Tech: completed device glowing).
 
@@ -263,12 +262,13 @@ For EACH scene provide:
    - Scene 3: MUST list every action from scene 2 as already completed.
 
 3. narrator_text:
-   - 1-2 sentences spoken aloud by an off-screen narrator, in {("Hebrew" if lang == "he" else "English")}
+   - Spoken aloud by an off-screen narrator, in {("Hebrew" if lang == "he" else "English")}
+   - MAX {clip_dur * 2} words — must fit within {clip_dur} seconds of speech.
    - Conversational and warm tone; fits the scene's emotional beat.
 
 4. caption_text / caption_text_en:
    - caption_text: EXACT verbatim copy of narrator_text — word-for-word identical, same language.
-   - caption_text_en: ALWAYS in English — concise 8-word version.
+   - caption_text_en: ALWAYS in English — max 5 words.
    - CRITICAL: caption_text MUST match narrator_text exactly.
 
 5. audio_mood:
@@ -302,7 +302,7 @@ The first character MUST be {{ and the last MUST be }}.
   "scenes": [
     {{
       "scene": 1,
-      "duration_sec": 10,
+      "duration_sec": {clip_dur},
       "entry_state": "opening shot — finished result already visible",
       "visual_description": "[canonical_subject] — [finished result + fluid camera + lighting/mood]",
       "caption_text": "...",
@@ -312,7 +312,7 @@ The first character MUST be {{ and the last MUST be }}.
     }},
     {{
       "scene": 2,
-      "duration_sec": 10,
+      "duration_sec": {clip_dur},
       "entry_state": "cut to initial state/components — chronological sequence begins",
       "visual_description": "[canonical_subject] — [full process arc: initiation → peak action → settle still + fluid camera + lighting/mood]",
       "caption_text": "...",
@@ -322,7 +322,7 @@ The first character MUST be {{ and the last MUST be }}.
     }},
     {{
       "scene": 3,
-      "duration_sec": 10,
+      "duration_sec": {clip_dur},
       "entry_state": "subject is fully complete and presented in its final environment",
       "visual_description": "[canonical_subject] — fully presented in its final state, [specific environmental details], camera slowly pushing in.",
       "caption_text": "...",

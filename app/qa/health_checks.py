@@ -85,26 +85,29 @@ async def _ping_s3() -> HealthResult:
 
 
 async def _ping_kling() -> HealthResult:
-    """Lightweight kie.ai health check — hits their account endpoint."""
+    """Lightweight kie.ai health check — queries a non-existent task to confirm API is reachable."""
     cfg = get_settings()
     t0 = time.monotonic()
     try:
         import httpx
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
-                f"{cfg.kie_api_base}/api/v1/account/costs",
+                f"{cfg.kie_api_base}/api/v1/jobs/queryTask",
                 headers={
                     "Authorization": f"Bearer {cfg.kie_api_key}",
                     "Content-Type": "application/json",
                 },
+                params={"taskId": "health-check"},
             )
-            # 200 or 401 both confirm the endpoint is reachable
-            # 401 means wrong key but service is up
-            if resp.status_code in (200, 401):
-                latency = int((time.monotonic() - t0) * 1000)
-                healthy = resp.status_code == 200
-                return HealthResult("kling", healthy, latency, None if healthy else "Invalid API key")
-            resp.raise_for_status()
+            latency = int((time.monotonic() - t0) * 1000)
+            # 401 = bad key, 4xx with JSON = API is up, key may be wrong
+            if resp.status_code == 401:
+                return HealthResult("kling", False, latency, "Invalid API key")
+            # Any response that isn't a network error means the service is reachable
+            # A 404/400 for a fake taskId is expected and means the API is healthy
+            data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
+            healthy = resp.status_code in (200, 400, 404) or data.get("code") is not None
+            return HealthResult("kling", healthy, latency, None if healthy else f"Unexpected status {resp.status_code}")
     except Exception as exc:
         latency = int((time.monotonic() - t0) * 1000)
         return HealthResult("kling", False, latency, str(exc))

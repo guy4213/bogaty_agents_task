@@ -263,7 +263,7 @@ async def run(state: ContentEngineState) -> dict:
     else:
         logger.info(
             "[%s] VideoAgent: item_%d initial clip (scene 1, %ds) caption_en='%s'",
-            task_id, item_index, cfg.veo_initial_duration_sec,
+            task_id, item_index, cfg.kie_clip_duration,
             scenes[0].get("caption_text_en", "⚠️ MISSING"),
         )
         initial_prompt    = _build_initial_prompt(scenes[0], lang, visual_style, canonical_subject)

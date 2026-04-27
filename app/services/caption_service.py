@@ -611,7 +611,7 @@ async def download_and_merge_clips_s3(
     task_id: str = "",
     item_index: int = -1,
 ) -> tuple[bytes, list[float]]:
-    """Download Kling clips from S3, merge with audio crossfade.
+    """Download Kling clips from S3, merge with looped audio.
     Mirror of download_and_merge_clips() but reads from S3 instead of GCS.
     Returns (merged_bytes, scene_durations).
     """
@@ -676,29 +676,53 @@ def _sync_merge_clips_s3(
             encoding="utf-8", errors="replace",
         )
     else:
+        total_duration = n * clip_duration
+
+        # Probe which clips have audio — find first clip with music (T2V clip)
+        ffprobe_exe = shutil.which("ffprobe") or ffmpeg_exe.replace("ffmpeg", "ffprobe")
+        def _has_audio(path: pathlib.Path) -> bool:
+            r = subprocess.run(
+                [ffprobe_exe, "-v", "quiet", "-select_streams", "a",
+                 "-show_entries", "stream=codec_type", "-of", "csv=p=0", path.name],
+                cwd=str(tmp_dir), capture_output=True, text=True,
+            )
+            return bool(r.stdout.strip())
+
+        clip_has_audio = [_has_audio(p) for p in clip_paths]
+        audio_src_idx = next((i for i, a in enumerate(clip_has_audio) if a), None)
+
+        # Build inputs: if we have music, prepend it with -stream_loop -1 for reliable looping
         inputs = []
+        if audio_src_idx is not None:
+            inputs += ["-stream_loop", "-1", "-i", clip_paths[audio_src_idx].name]
+            music_idx = 0
+            v_offset = 1
+        else:
+            music_idx = None
+            v_offset = 0
+
         for p in clip_paths:
             inputs += ["-i", p.name]
 
         filter_parts = []
         for i in range(n):
+            vi = i + v_offset
             filter_parts.append(
-                f"[{i}:v]scale=720:1280:force_original_aspect_ratio=decrease,"
+                f"[{vi}:v]scale=720:1280:force_original_aspect_ratio=decrease,"
                 f"pad=720:1280:(ow-iw)/2:(oh-ih)/2,setsar=1[v{i}]"
             )
         video_inputs = "".join(f"[v{i}]" for i in range(n))
         filter_parts.append(f"{video_inputs}concat=n={n}:v=1:a=0[vout]")
 
-        first_out = "aout" if n == 2 else "atmp1"
-        filter_parts.append(
-            f"[0:a][1:a]acrossfade=d=0.4:c1=tri:c2=tri[{first_out}]"
-        )
-        for j in range(2, n):
-            prev = "atmp1" if j == 2 else f"atmp{j - 1}"
-            out  = "aout"  if j == n - 1 else f"atmp{j}"
+        if music_idx is not None:
             filter_parts.append(
-                f"[{prev}][{j}:a]acrossfade=d=0.4:c1=tri:c2=tri[{out}]"
+                f"[{music_idx}:a]atrim=duration={total_duration},asetpts=PTS-STARTPTS[aout]"
             )
+            audio_map = ["-map", "[aout]"]
+            audio_codec = ["-c:a", "aac"]
+        else:
+            audio_map = []
+            audio_codec = ["-an"]
 
         filter_complex = ";".join(filter_parts)
         cmd = [
@@ -706,14 +730,15 @@ def _sync_merge_clips_s3(
         ] + inputs + [
             "-filter_complex", filter_complex,
             "-map", "[vout]",
-            "-map", "[aout]",
+        ] + audio_map + [
             "-c:v", "libx264",
-            "-c:a", "aac",
             "-crf", "18",
             "-preset", "fast",
+        ] + audio_codec + [
             output_path.name,
         ]
-        logger.info("%s · merging %d Kling clips — video=hard_cut audio=crossfade(0.4s)", prefix, n)
+        logger.info("%s · merging %d Kling clips — video=hard_cut audio=stream_loop(%ds) src=clip%s",
+                    prefix, n, total_duration, audio_src_idx)
         proc = subprocess.run(
             cmd, cwd=str(tmp_dir),
             capture_output=True, text=True,

@@ -42,6 +42,7 @@ async def _submit_task(payload: dict) -> str:
 
 
 async def _poll_task(task_id: str) -> str:
+    import json as _json
     cfg = get_settings()
     loop = asyncio.get_running_loop()
     deadline = loop.time() + cfg.kie_poll_timeout_sec
@@ -53,17 +54,19 @@ async def _poll_task(task_id: str) -> str:
                 )
             await asyncio.sleep(cfg.kie_poll_interval_sec)
             resp = await client.get(
-                f"{cfg.kie_api_base}/api/v1/jobs/queryTask",
+                f"{cfg.kie_api_base}/api/v1/jobs/recordInfo",
                 headers=_headers(),
                 params={"taskId": task_id},
             )
             resp.raise_for_status()
             data = resp.json()
-            status = data["data"]["status"]
-            if status == "succeed":
-                return data["data"]["works"][0]["resource_list"][0]["url"]
-            if status == "failed":
-                raise RuntimeError(f"Kling task {task_id} failed")
+            state = data["data"]["state"]
+            if state == "success":
+                result = _json.loads(data["data"]["resultJson"])
+                return result["resultUrls"][0]
+            if state == "fail":
+                fail_msg = data["data"].get("failMsg", "unknown error")
+                raise RuntimeError(f"Kling task {task_id} failed: {fail_msg}")
 
 
 async def _download_video_url(url: str) -> bytes:
@@ -90,8 +93,7 @@ async def generate_video_initial(prompt: str) -> str:
                     "prompt": prompt,
                     "duration": str(cfg.kie_clip_duration),
                     "aspect_ratio": "9:16",
-                    "mode": "pro",
-                    "cfg_scale": 0.5,
+                    "sound": True,
                 },
             }
             task_id = await _submit_task(payload)
@@ -149,7 +151,12 @@ async def generate_video_from_frame(
 
     breaker = get_breaker("kling")
     delays = [10, 30, 60]
-    image_b64 = base64.b64encode(frame_bytes).decode("utf-8")
+
+    # Upload frame to S3 and get a presigned URL — kie.ai requires a real URL, not base64
+    frame_s3_key = f"kling-temp/{uuid.uuid4().hex}/frame_{extend_index}.png"
+    from app.services.s3_client import upload_bytes as _s3_upload, presigned_url as _s3_presign
+    await _s3_upload(frame_s3_key, frame_bytes, content_type="image/png")
+    frame_url = await _s3_presign(frame_s3_key, expiry_sec=3600)
 
     for attempt in range(4):
         async def _call() -> str:
@@ -157,10 +164,8 @@ async def generate_video_from_frame(
                 "model": cfg.kie_model_i2v,
                 "input": {
                     "prompt": prompt,
-                    "image": f"data:image/png;base64,{image_b64}",
+                    "image_url": frame_url,
                     "duration": str(cfg.kie_clip_duration),
-                    "aspect_ratio": "9:16",
-                    "mode": "pro",
                     "cfg_scale": 0.5,
                 },
             }

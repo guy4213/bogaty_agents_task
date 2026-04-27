@@ -14,7 +14,11 @@
       "Bash(DRY_RUN=true VIDEO_PROVIDER=kling /c/Users/guy42/AppData/Local/Programs/Python/Python312/python.exe *)",
       "Bash(PYTHONIOENCODING=utf-8 DRY_RUN=true VIDEO_PROVIDER=kling /c/Users/guy42/AppData/Local/Programs/Python/Python312/python.exe *)",
       "Bash(PYTHONIOENCODING=utf-8 PYTHONPATH=/c/Users/guy42/Desktop/bogaty_agents_task DRY_RUN=true VIDEO_PROVIDER=kling /c/Users/guy42/AppData/Local/Programs/Python/Python312/python.exe *)",
-      "Bash(PYTHONIOENCODING=utf-8 PYTHONPATH=/c/Users/guy42/Desktop/bogaty_agents_task DRY_RUN=true VIDEO_PROVIDER=veo /c/Users/guy42/AppData/Local/Programs/Python/Python312/python.exe app/scripts/test_e2e_dry_run.py --scenario 2)"
+      "Bash(PYTHONIOENCODING=utf-8 PYTHONPATH=/c/Users/guy42/Desktop/bogaty_agents_task DRY_RUN=true VIDEO_PROVIDER=veo /c/Users/guy42/AppData/Local/Programs/Python/Python312/python.exe app/scripts/test_e2e_dry_run.py --scenario 2)",
+      "Bash(curl -s http://localhost:8000/)",
+      "WebSearch",
+      "WebFetch(domain:docs.kie.ai)",
+      "WebFetch(domain:kie.ai)"
     ]
   }
 }
