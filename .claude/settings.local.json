@@ -21,7 +21,22 @@
       "WebFetch(domain:kie.ai)",
       "Bash(python *)",
       "Bash(py *)",
-      "Bash(python3 *)"
+      "Bash(python3 *)",
+      "Bash(where python *)",
+      "Bash(where uvicorn *)",
+      "Read(//c/Users/guy42/AppData/Local/Programs/Python/**)",
+      "Read(//c//**)",
+      "PowerShell(Get-Command *)",
+      "PowerShell(Test-Path *)",
+      "PowerShell($py = \"C:\\\\Users\\\\guy42\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\python.exe\"; & $py --version; Test-Path \"C:\\\\Users\\\\guy42\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\Scripts\\\\uvicorn.exe\")",
+      "PowerShell($env:DRY_RUN=\"true\"; $env:ANTHROPIC_API_KEY=\"dry-run\"; $env:GOOGLE_AI_API_KEY=\"dry-run\"; $env:AWS_ACCESS_KEY_ID=\"dry-run\"; $env:AWS_SECRET_ACCESS_KEY=\"dry-run\"; $env:S3_BUCKET_NAME=\"dry-run\"; $env:KIE_API_KEY=\"dry-run\"; $env:LOG_LEVEL=\"WARNING\"; Start-Process -FilePath \"C:\\\\Users\\\\guy42\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\Scripts\\\\uvicorn.exe\" -ArgumentList \"app.main:app --port 8000 --log-level warning\" -WorkingDirectory \"C:\\\\Users\\\\guy42\\\\Desktop\\\\bogaty_agents_task\" -WindowStyle Hidden -PassThru | Select-Object Id)",
+      "PowerShell(Set-Location \"C:\\\\Users\\\\guy42\\\\Desktop\\\\bogaty_agents_task\"; $env:DRY_RUN=\"true\"; $env:ANTHROPIC_API_KEY=\"dry-run\"; $env:GOOGLE_AI_API_KEY=\"dry-run\"; $env:AWS_ACCESS_KEY_ID=\"dry-run\"; $env:AWS_SECRET_ACCESS_KEY=\"dry-run\"; $env:S3_BUCKET_NAME=\"dry-run\"; $env:KIE_API_KEY=\"dry-run\"; $env:LOG_LEVEL=\"WARNING\"; $proc = Start-Process -FilePath \"C:\\\\Users\\\\guy42\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\Scripts\\\\uvicorn.exe\" -ArgumentList \"app.main:app --port 8000 --log-level warning\" -WorkingDirectory \"C:\\\\Users\\\\guy42\\\\Desktop\\\\bogaty_agents_task\" -WindowStyle Hidden -PassThru; Start-Sleep 5; Write-Output \"PID=$\\($proc.Id\\)\"; Invoke-WebRequest -Uri \"http://localhost:8000/\" -UseBasicParsing | Select-Object StatusCode, Content)",
+      "PowerShell(Start-Sleep 4; try { $r = Invoke-WebRequest -Uri \"http://localhost:8000/\" -UseBasicParsing; Write-Output \"STATUS=$\\($r.StatusCode\\) BODY=$\\($r.Content\\)\" } catch { Write-Output \"ERROR: $_\" })",
+      "PowerShell(Set-Location \"C:\\\\Users\\\\guy42\\\\Desktop\\\\bogaty_agents_task\"; $env:PYTHONUTF8=\"1\"; & \"C:\\\\Users\\\\guy42\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\python.exe\" -X utf8 app/scripts/test_e2e_dry_run.py 2>&1)",
+      "PowerShell(Set-Location \"C:\\\\Users\\\\guy42\\\\Desktop\\\\bogaty_agents_task\"; $env:PYTHONUTF8=\"1\"; $env:PYTHONPATH=\"C:\\\\Users\\\\guy42\\\\Desktop\\\\bogaty_agents_task\"; & \"C:\\\\Users\\\\guy42\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\python.exe\" -X utf8 -m app.scripts.test_e2e_dry_run 2>&1)",
+      "PowerShell(Set-Location \"C:\\\\Users\\\\guy42\\\\Desktop\\\\bogaty_agents_task\"; $env:PYTHONUTF8=\"1\"; $env:PYTHONPATH=\"C:\\\\Users\\\\guy42\\\\Desktop\\\\bogaty_agents_task\"; & \"C:\\\\Users\\\\guy42\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\python.exe\" -X utf8 -m app.scripts.test_e2e_dry_run 2>&1 | Select-String -Pattern \"^  \\(✅|❌|Summary|Scenario|All passed|Some failed|PASS|FAIL\\)\" | ForEach-Object { $_.Line })",
+      "PowerShell(Set-Location \"C:\\\\Users\\\\guy42\\\\Desktop\\\\bogaty_agents_task\"; $env:PYTHONUTF8=\"1\"; $env:PYTHONPATH=\"C:\\\\Users\\\\guy42\\\\Desktop\\\\bogaty_agents_task\"; & \"C:\\\\Users\\\\guy42\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\python.exe\" -X utf8 -m app.scripts.test_e2e_dry_run 2>&1 | Select-String -Pattern \"WARNING|ERROR|parse failed\" | ForEach-Object { $_.Line })",
+      "PowerShell(Set-Location \"C:\\\\Users\\\\guy42\\\\Desktop\\\\bogaty_agents_task\"; $env:PYTHONUTF8=\"1\"; $env:PYTHONPATH=\"C:\\\\Users\\\\guy42\\\\Desktop\\\\bogaty_agents_task\"; & \"C:\\\\Users\\\\guy42\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\python.exe\" -X utf8 -m app.scripts.test_e2e_dry_run 2>&1 | Where-Object { $_ -match \"\\(WARNING|ERROR|parse failed|✅|❌|All passed|Some failed|Summary\\)\" } | ForEach-Object { $_.ToString\\(\\) })"
     ]
   }
 }

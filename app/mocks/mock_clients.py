@@ -285,7 +285,9 @@ def _make_reel_script(lang: str) -> str:
 
     return json.dumps({
         "index":                   0,
+        "canonical_subject":       "pasta dish with cherry tomatoes and basil",
         "visual_style_descriptor": "Warm golden-hour tones, steam rising close-ups, slow push-in camera, vibrant appetizing mood.",
+        "content_category":        "food",
         "scenes":                  scenes,
         "hashtags":                ["#pasta", "#homecooking", "#reels", "#foodvideo"],
         "full_caption":            caption,
@@ -326,12 +328,18 @@ async def mock_claude_complete(messages: list, system: str = "", max_tokens: int
         text = _make_single_caption(item_index, lang, platform)
 
     elif "evaluate" in prompt.lower() or "score" in prompt.lower():
-        text = json.dumps({
-            "scores": [],  # batch format — see content_validator.py
-            "overall_feedback": "Content looks natural and on-brand.",
-        })
-        # fallback for legacy single-item evaluate calls
-        text = json.dumps({"score": 8, "issues": [], "feedback": "Content looks natural and on-brand."})
+        # Return the array format that _llm_quality_check_batch expects
+        n = 1
+        for line in prompt.split("\n"):
+            if "Evaluate these" in line:
+                try:
+                    n = int(line.split("Evaluate these")[1].split()[0])
+                except Exception:
+                    pass
+        text = json.dumps([
+            {"index": i, "score": 8, "issues": [], "feedback": "Content looks natural and on-brand."}
+            for i in range(n)
+        ])
 
     else:
         text = json.dumps([{"index": 0, "text": "Mock content.", "persona": "food_blogger"}])

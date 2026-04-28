@@ -204,7 +204,7 @@ def _trim_clip_sync(video_bytes: bytes, duration: float) -> bytes:
     static_ffmpeg.add_paths()
     ffmpeg_exe = shutil.which("ffmpeg")
 
-    tmp_dir = pathlib.Path("C:/tmp/ffmpeg_work")
+    tmp_dir = pathlib.Path("/tmp/ffmpeg_work")
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
     inp = tmp_dir / "trim_in.mp4"

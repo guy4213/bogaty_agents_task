@@ -80,6 +80,20 @@ export default function HealthPage() {
           </div>
         )}
 
+        {!isLoading && !data && (
+          <div className="flex flex-col items-center justify-center py-16 gap-3">
+            <p className="text-[13px]" style={{ color: 'var(--danger)' }}>⚠ Failed to reach the backend — check your connection.</p>
+            <button
+              type="button"
+              onClick={() => refetch()}
+              className="text-[12px] px-3 py-1.5 rounded-[var(--radius-sm)]"
+              style={{ border: '1px solid var(--border2)', color: 'var(--fg2)' }}
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
         {data && (
           <>
             {/* Overall banner */}

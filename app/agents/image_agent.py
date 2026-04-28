@@ -78,19 +78,29 @@ async def run(state: ContentEngineState) -> dict:
 
     if style_ref_key:
         try:
-            from app.services.s3_client import _get_client
             cfg = get_settings()
-            loop = asyncio.get_event_loop()
-            s3 = _get_client()
-            resp = await loop.run_in_executor(
-                None,
-                lambda: s3.get_object(Bucket=cfg.s3_bucket_name, Key=style_ref_key),
-            )
-            style_reference_bytes = resp["Body"].read()
-            logger.info(
-                "[%s] ImageAgent: style reference loaded (%d bytes) from %s",
-                task_id, len(style_reference_bytes), style_ref_key,
-            )
+            if cfg.dry_run:
+                from app.mocks.mock_clients import _LOCAL_S3_ROOT
+                local_path = _LOCAL_S3_ROOT / style_ref_key
+                if local_path.exists():
+                    style_reference_bytes = local_path.read_bytes()
+                    logger.info(
+                        "[%s] ImageAgent: style reference loaded (%d bytes) from local mock: %s",
+                        task_id, len(style_reference_bytes), local_path,
+                    )
+            else:
+                from app.services.s3_client import _get_client
+                loop = asyncio.get_event_loop()
+                s3 = _get_client()
+                resp = await loop.run_in_executor(
+                    None,
+                    lambda: s3.get_object(Bucket=cfg.s3_bucket_name, Key=style_ref_key),
+                )
+                style_reference_bytes = resp["Body"].read()
+                logger.info(
+                    "[%s] ImageAgent: style reference loaded (%d bytes) from %s",
+                    task_id, len(style_reference_bytes), style_ref_key,
+                )
         except Exception as exc:
             logger.warning(
                 "[%s] ImageAgent: could not load style reference (%s) — proceeding without",

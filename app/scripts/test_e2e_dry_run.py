@@ -149,9 +149,11 @@ async def run_scenario(num: int) -> bool:
                 ok &= chk(f"item_{i}/image.png",   "image.png"   in files)
                 ok &= chk(f"item_{i}/caption.txt", "caption.txt" in files)
             elif ct == "reels":
-                ok &= chk(f"item_{i}/video.mp4",     "video.mp4"     in files)
-                ok &= chk(f"item_{i}/thumbnail.png", "thumbnail.png" in files)
-                ok &= chk(f"item_{i}/script.txt",    "script.txt"    in files)
+                ok &= chk(f"item_{i}/video.mp4",  "video.mp4"  in files)
+                ok &= chk(f"item_{i}/script.txt", "script.txt" in files)
+                # thumbnail.png is style anchor — only item_0 has it
+                if i == 0:
+                    ok &= chk(f"item_0/thumbnail.png", "thumbnail.png" in files)
                 script_file = item_dir / "script.txt"
                 if script_file.exists():
                     script_content = script_file.read_text(encoding="utf-8")
